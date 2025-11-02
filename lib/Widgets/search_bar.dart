@@ -40,16 +40,19 @@ class SearchBarWidget extends StatelessWidget {
                 const Icon(Icons.search, color: Colors.grey),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: TextField(
-                    controller: controller,
-                    onChanged: onChanged,
-                    readOnly: readOnly,
-                    decoration: const InputDecoration(
-                      hintText: 'Search here...',
-                      border: InputBorder.none,
-                      isDense: true,
+                  child: AbsorbPointer(
+                    absorbing: readOnly, // when true, TextField won't steal taps
+                    child: TextField(
+                      controller: controller,
+                      onChanged: onChanged,
+                      readOnly: readOnly,
+                      decoration: const InputDecoration(
+                        hintText: 'Search here...',
+                        border: InputBorder.none,
+                        isDense: true,
+                      ),
+                      style: const TextStyle(fontSize: 16),
                     ),
-                    style: const TextStyle(fontSize: 16),
                   ),
                 ),
                 const Padding(
