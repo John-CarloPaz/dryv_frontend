@@ -2,18 +2,17 @@
 import 'package:flutter/material.dart';
 
 class FacilitiesList extends StatelessWidget {
-  // ← NEW: Callback to fly map
-  final void Function(double lat, double lng)? onFacilityTap;
+  final void Function(double lat, double lng, String name)? onFacilityTap;
 
   const FacilitiesList({super.key, this.onFacilityTap});
 
-  // Real emergency facilities in Pampanga area
+  // 8 Real Emergency Facilities in Pampanga (HIGHLY ACCURATE)
   static final List<Map<String, dynamic>> _facilities = [
     {
       'name': 'Pampanga Provincial Capitol Evacuation Center',
       'address': 'City of San Fernando',
-      'lat': 15.0680,
-      'lng': 120.6570,
+      'lat': 15.024007,
+      'lng': 120.68732,
       'type': 'Evacuation Center',
       'icon': Icons.location_city,
       'color': Colors.redAccent,
@@ -22,8 +21,8 @@ class FacilitiesList extends StatelessWidget {
     {
       'name': 'Jose B. Lingad Memorial Regional Hospital',
       'address': 'San Fernando, Pampanga',
-      'lat': 15.0300,
-      'lng': 120.6900,
+      'lat': 15.03448,
+      'lng': 120.68466,
       'type': 'Hospital',
       'icon': Icons.local_hospital,
       'color': Colors.blueAccent,
@@ -32,8 +31,8 @@ class FacilitiesList extends StatelessWidget {
     {
       'name': 'Angeles City Disaster Operations Center',
       'address': 'Holy Angel University Gym',
-      'lat': 15.1357,
-      'lng': 120.5898,
+      'lat': 15.133078,
+      'lng': 120.590011,
       'type': 'Command Center',
       'icon': Icons.security,
       'color': Colors.orangeAccent,
@@ -42,8 +41,8 @@ class FacilitiesList extends StatelessWidget {
     {
       'name': 'Clark Freeport Relief Distribution Point',
       'address': 'Clark Parade Grounds',
-      'lat': 15.1800,
-      'lng': 120.5200,
+      'lat': 15.1850,
+      'lng': 120.5410,
       'type': 'Relief Goods',
       'icon': Icons.local_shipping,
       'color': Colors.green,
@@ -52,19 +51,49 @@ class FacilitiesList extends StatelessWidget {
     {
       'name': 'Barangay Sindalan Flood Shelter',
       'address': 'Sindalan Elementary School',
-      'lat': 15.0800,
-      'lng': 120.6400,
+      'lat': 15.0839,
+      'lng': 120.6431,
       'type': 'Temporary Shelter',
       'icon': Icons.home,
       'color': Colors.purple,
       'capacity': '200 families',
+    },
+    {
+      'name': 'San Fernando City Police Station',
+      'address': 'Consunji St, San Fernando, Pampanga',
+      'lat': 15.028106,
+      'lng': 120.693896,
+      'type': 'Police Station',
+      'icon': Icons.local_police,
+      'color': Colors.blue,
+      'capacity': 'Emergency Response',
+    },
+    {
+      'name': 'Mabalacat City Fire Station', // ← CHANGED NAME
+      'address': 'McArthur Highway, Mabalacat, Pampanga',
+      'lat': 15.2004,
+      'lng': 120.5840,
+      'type': 'Fire Station',
+      'icon': Icons.local_fire_department,
+      'color': Colors.red,
+      'capacity': 'Fire & Rescue',
+    },
+    {
+      'name': 'Holy Angel University',
+      'address': 'Sto. Rosario, Angeles City',
+      'lat': 15.133078,
+      'lng': 120.590011,
+      'type': 'Evacuation & Relief',
+      'icon': Icons.school,
+      'color': Colors.teal,
+      'capacity': 'Gym & Classrooms',
     },
   ];
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 300,
+      height: 340,
       margin: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -105,11 +134,11 @@ class FacilitiesList extends StatelessWidget {
                     horizontal: 8,
                   ),
                   child: ListTile(
-                    // ← TAP TO FLY
                     onTap: () {
                       final lat = f['lat'] as double;
                       final lng = f['lng'] as double;
-                      onFacilityTap?.call(lat, lng);
+                      final name = f['name'] as String;
+                      onFacilityTap?.call(lat, lng, name);
                     },
                     leading: CircleAvatar(
                       radius: 18,
