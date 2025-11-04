@@ -59,24 +59,24 @@ class _MapScreenState extends State<MapScreen> {
     {
       'name': 'Sindalan Shelter',
       'fullName': 'Barangay Sindalan Flood Shelter',
-      'lat': 15.0833,
-      'lng': 120.6426,
+      'lat': 15.0837,
+      'lng': 120.6433,
       'color': Colors.purple,
       'icon': Icons.home,
     },
     {
       'name': 'SF Police',
       'fullName': 'San Fernando City Police Station',
-      'lat': 15.028106,
-      'lng': 120.693896,
+      'lat': 15.0675,
+      'lng': 120.6542,
       'color': Colors.blue,
       'icon': Icons.local_police,
     },
     {
       'name': 'Mabalacat Fire',
       'fullName': 'Mabalacat City Fire Station',
-      'lat': 15.0794,
-      'lng': 120.6189,
+      'lat': 15.2006,
+      'lng': 120.5840,
       'color': Colors.red,
       'icon': Icons.local_fire_department,
     },
@@ -88,6 +88,34 @@ class _MapScreenState extends State<MapScreen> {
       'color': Colors.teal,
       'icon': Icons.school,
     },
+    {
+      'name': 'AUF Med Center', // Short name for chip
+      'fullName':
+          'Angeles University Foundation Medical Center', // Long name for SnackBar
+      'lat': 15.1452,
+      'lng': 120.5950,
+      'color': Colors.blueAccent,
+      'icon': Icons.local_hospital,
+    },
+    {
+      'name': 'St. Catherine Hosp', // Short name for chip
+      'fullName':
+          'St. Catherine of Alexandria Foundation', // Long name for SnackBar
+      'lat': 15.1304,
+      'lng': 120.5762,
+      'color': Colors.blue,
+      'icon': Icons.local_hospital,
+    },
+    {
+      'name': 'SPCF Foundation', // Short name for chip
+      'fullName': 'Systems Plus College Foundation', // Long name for SnackBar
+      'lat': 15.1585,
+      'lng': 120.5924,
+      'color': Colors.green,
+      'icon': Icons.school,
+    },
+
+    // --- END NEW FACILITIES ---
   ];
 
   // Fly to location + show name
