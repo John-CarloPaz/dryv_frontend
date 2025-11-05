@@ -22,120 +22,91 @@ class _MapScreenState extends State<MapScreen> {
   final defaultLng = 120.592083;
   final defaultLat = 15.158430;
 
-  // === 8 EMERGENCY FACILITIES WITH ACCURATE COORDS ===
+  // === 11 CRUCIAL FACILITIES ===
   static final List<Map<String, dynamic>> _facilities = [
     {
-      'name': 'Capitol Evac',
-      'fullName': 'Pampanga Provincial Capitol Evacuation Center',
+      'name': 'Pampanga Provincial Capitol Evacuation Center',
       'lat': 15.024007,
       'lng': 120.68732,
-      'color': Colors.redAccent,
       'icon': Icons.location_city,
+      'color': Colors.redAccent,
     },
     {
-      'name': 'JBL Hospital',
-      'fullName': 'Jose B. Lingad Memorial Regional Hospital',
+      'name': 'Jose B. Lingad Memorial Regional Hospital',
       'lat': 15.03448,
       'lng': 120.68466,
-      'color': Colors.blueAccent,
       'icon': Icons.local_hospital,
+      'color': Colors.blueAccent,
     },
     {
-      'name': 'HAU Gym',
-      'fullName': 'Angeles City Disaster Operations Center',
+      'name': 'Angeles City Disaster Operations Center',
       'lat': 15.133078,
       'lng': 120.590011,
-      'color': Colors.orangeAccent,
       'icon': Icons.security,
+      'color': Colors.orangeAccent,
     },
     {
-      'name': 'Clark Relief',
-      'fullName': 'Clark Freeport Relief Distribution Point',
+      'name': 'Clark Freeport Relief Distribution Point',
       'lat': 15.1850,
       'lng': 120.5410,
-      'color': Colors.green,
       'icon': Icons.local_shipping,
+      'color': Colors.green,
     },
     {
-      'name': 'Sindalan Shelter',
-      'fullName': 'Barangay Sindalan Flood Shelter',
-      'lat': 15.0837,
+      'name': 'Barangay Sindalan Flood Shelter',
+      'lat': 15.0833,
       'lng': 120.6433,
-      'color': Colors.purple,
       'icon': Icons.home,
+      'color': Colors.purple,
     },
     {
-      'name': 'SF Police',
-      'fullName': 'San Fernando City Police Station',
-      'lat': 15.0675,
+      'name': 'San Fernando City Police Station',
+      'lat': 15.0674,
       'lng': 120.6542,
-      'color': Colors.blue,
       'icon': Icons.local_police,
+      'color': Colors.blue,
     },
     {
-      'name': 'Mabalacat Fire',
-      'fullName': 'Mabalacat City Fire Station',
-      'lat': 15.2006,
-      'lng': 120.5840,
-      'color': Colors.red,
+      'name': 'Mabalacat City Fire Station',
+      'lat': 15.2005,
+      'lng': 120.5841,
       'icon': Icons.local_fire_department,
+      'color': Colors.red,
     },
     {
-      'name': 'Holy Angel U',
-      'fullName': 'Holy Angel University',
+      'name': 'Holy Angel University',
       'lat': 15.133078,
       'lng': 120.590011,
-      'color': Colors.teal,
       'icon': Icons.school,
+      'color': Colors.teal,
     },
     {
-      'name': 'AUF Med Center', // Short name for chip
-      'fullName':
-          'Angeles University Foundation Medical Center', // Long name for SnackBar
-      'lat': 15.1452,
+      'name': 'Angeles University Foundation Medical Center',
+      'lat': 15.1453,
       'lng': 120.5950,
-      'color': Colors.blueAccent,
       'icon': Icons.local_hospital,
+      'color': Colors.indigo,
     },
     {
-      'name': 'St. Catherine Hosp', // Short name for chip
-      'fullName':
-          'St. Catherine of Alexandria Foundation', // Long name for SnackBar
+      'name': 'St. Catherine Hospital',
       'lat': 15.1304,
       'lng': 120.5762,
-      'color': Colors.blue,
       'icon': Icons.local_hospital,
+      'color': Colors.pinkAccent,
     },
     {
-      'name': 'SPCF Foundation', // Short name for chip
-      'fullName': 'Systems Plus College Foundation', // Long name for SnackBar
-      'lat': 15.1585,
-      'lng': 120.5924,
-      'color': Colors.green,
+      'name': 'Systems Plus College Foundation',
+      'lat': 15.1592,
+      'lng': 120.5932,
       'icon': Icons.school,
+      'color': Colors.deepOrange,
     },
-
-    // --- END NEW FACILITIES ---
   ];
 
-  // Fly to location + show name
-  Future<void> _flyTo(double lat, double lng, String name) async {
-    if (!mapboxMapInitialized) return;
+  bool _pinsVisible = false;
 
-    await mapboxMap.flyTo(
-      CameraOptions(center: Point(coordinates: Position(lng, lat)), zoom: 17.0),
-      MapAnimationOptions(duration: 1200),
-    );
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(name), duration: const Duration(seconds: 1)),
-      );
-    }
-  }
-
-  // Create colored pin
-  Future<Uint8List> _createPinImage(Color color) async {
+  // Create colored pin with white dot
+  Future<Uint8List> _createPin(Color color) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     const size = 48.0;
@@ -160,25 +131,30 @@ class _MapScreenState extends State<MapScreen> {
     return byteData!.buffer.asUint8List();
   }
 
-  // Add all markers
-  Future<void> _addAllMarkers() async {
+  // Toggle pins
+  Future<void> _togglePins() async {
     if (_annotationManager == null) return;
-    await _annotationManager!.deleteAll();
 
-    for (final f in _facilities) {
-      final image = await _createPinImage(f['color']);
-      await _annotationManager!.create(
-        PointAnnotationOptions(
-          geometry: Point(coordinates: Position(f['lng'], f['lat'])),
-          image: image,
-          iconSize: 1.0,
-          iconOffset: [0, -20],
-          textField: f['name'],
-          textOffset: [0, -40],
-          textColor: Colors.black.value,
-          textSize: 11,
-        ),
-      );
+    if (_pinsVisible) {
+      await _annotationManager!.deleteAll();
+      setState(() => _pinsVisible = false);
+    } else {
+      for (final f in _facilities) {
+        final image = await _createPin(f['color']);
+        await _annotationManager!.create(
+          PointAnnotationOptions(
+            geometry: Point(coordinates: Position(f['lng'], f['lat'])),
+            image: image,
+            iconSize: 1.0,
+            iconOffset: [0, -20],
+            textField: f['name'],
+            textOffset: [0, -40],
+            textColor: Colors.black.value,
+            textSize: 11,
+          ),
+        );
+      }
+      setState(() => _pinsVisible = true);
     }
   }
 
@@ -189,7 +165,7 @@ class _MapScreenState extends State<MapScreen> {
         children: [
           // MAP
           MapWidget(
-            key: const ValueKey('mapbox'),
+            key: ValueKey('mapbox'),
             cameraOptions: CameraOptions(
               center: Point(coordinates: Position(defaultLng, defaultLat)),
               zoom: 12,
@@ -202,7 +178,6 @@ class _MapScreenState extends State<MapScreen> {
               _annotationManager = await mapboxMap.annotations
                   .createPointAnnotationManager();
               setState(() => mapboxMapInitialized = true);
-              await _addAllMarkers();
             },
           ),
 
@@ -222,42 +197,32 @@ class _MapScreenState extends State<MapScreen> {
               child: LayerButtonWidget(mapboxMap: mapboxMap),
             ),
 
-          // === HORIZONTAL FACILITY CHIPS (LIKE GOOGLE MAPS) ===
+          // === "CRUCIAL FACILITIES" CHIP ===
           Positioned(
-            top: 110, // Just below search bar
+            top: 110,
             left: 16,
-            right: 16,
-            child: SizedBox(
-              height: 44,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _facilities.length,
-                itemBuilder: (context, index) {
-                  final f = _facilities[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ActionChip(
-                      avatar: Icon(f['icon'], size: 18, color: f['color']),
-                      label: Text(
-                        f['name'],
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      backgroundColor: Colors.white,
-                      elevation: 2,
-                      pressElevation: 4,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(22),
-                        side: BorderSide(color: Colors.grey[300]!),
-                      ),
-                      onPressed: () =>
-                          _flyTo(f['lat'], f['lng'], f['fullName']),
-                    ),
-                  );
-                },
+            child: ActionChip(
+              avatar: Icon(
+                Icons.security,
+                size: 18,
+                color: _pinsVisible ? Colors.white : null,
               ),
+              label: Text(
+                'Crucial Facilities',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: _pinsVisible ? Colors.white : null,
+                ),
+              ),
+              backgroundColor: _pinsVisible ? Colors.redAccent : Colors.white,
+              elevation: _pinsVisible ? 4 : 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+                side: BorderSide(
+                  color: _pinsVisible ? Colors.redAccent : Colors.grey[300]!,
+                ),
+              ),
+              onPressed: _togglePins,
             ),
           ),
         ],
@@ -268,7 +233,7 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _openSearchScreen() async {
     final result = await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const SearchScreen()),
+      MaterialPageRoute(builder: (_) => SearchScreen()),
     );
 
     if (result != null && mounted && mapboxMapInitialized) {
