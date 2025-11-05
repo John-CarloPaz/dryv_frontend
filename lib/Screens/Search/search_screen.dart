@@ -5,7 +5,9 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:uuid/uuid.dart';
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key});
+  final String? initialQuery;
+
+  const SearchScreen({super.key, this.initialQuery});
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -58,14 +60,28 @@ class _SearchScreenState extends State<SearchScreen> {
       final data = json.decode(response.body);
       final feature = data["features"]?[0];
       if (feature != null) {
+        final name = feature["properties"]?["name"] ?? feature["name"] ?? "Unknown";
+        final address = feature["properties"]?["place_formatted"] ?? feature["properties"]?['address'] ?? feature["place_formatted"] ?? "";
+        if (!mounted) return;
         Navigator.pop(context, {
-          "name": feature["properties"]["name"] ?? feature["name"] ?? "Unknown",
+          "name": name,
+          "address": address,
           "lng": feature["geometry"]["coordinates"][0],
           "lat": feature["geometry"]["coordinates"][1],
         });
       }
     } else {
       debugPrint("Retrieve error: ${response.body}");
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialQuery != null && widget.initialQuery!.isNotEmpty) {
+      _controller.text = widget.initialQuery!;
+      // perform an initial search so results are populated
+      _searchPlaces(widget.initialQuery!);
     }
   }
 

@@ -3,7 +3,8 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 class LayerButtonWidget extends StatefulWidget {
   final MapboxMap mapboxMap;
-  const LayerButtonWidget({super.key, required this.mapboxMap});
+  final VoidCallback? onStyleChanged;
+  const LayerButtonWidget({super.key, required this.mapboxMap, this.onStyleChanged});
 
   @override
   State<LayerButtonWidget> createState() => _LayerButtonWidgetState();
@@ -64,34 +65,81 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
 
   Future<void> _changeMapStyle(String styleUrl) async {
     await widget.mapboxMap.style.setStyleURI(styleUrl);
+    // Notify parent so it can re-apply sources/layers that were removed by style change
+    widget.onStyleChanged?.call();
   }
 
   Future<void> _toggleFloodLayer() async {
     final mapboxMap = widget.mapboxMap;
 
     if (_isFloodLayerVisible) {
-      await mapboxMap.style.styleLayerExists('flood-layer').then((exists) async {
-        if (exists) {
-          await mapboxMap.style.removeStyleLayer('flood-layer');
-        }
-      });
-      _isFloodLayerVisible = false;
-    } else {
-      await mapboxMap.style.addSource(
-        GeoJsonSource(
-          id: 'flood-source',
-          data: 'https://example.com/floodmap.geojson', // Replace with real GeoJSON URL
-        ),
-      );
+      // Remove flood layers + source
+      for (final id in [
+        'flood-layer-var1',
+        'flood-layer-var2',
+        'flood-layer-var3',
+      ]) {
+        final exists = await mapboxMap.style.styleLayerExists(id);
+        if (exists) await mapboxMap.style.removeStyleLayer(id);
+      }
 
-      await mapboxMap.style.addLayer(
-        FillLayer(
-          id: 'flood-layer',
-          sourceId: 'flood-source',
-          fillColor: Colors.blue.withValues(alpha: 0.4).toARGB32(),
-        ),
-      );
-      _isFloodLayerVisible = true;
+      final sourceExists = await mapboxMap.style.styleSourceExists('flood_source');
+      if (sourceExists) await mapboxMap.style.removeStyleSource('flood_source');
+
+      setState(() => _isFloodLayerVisible = false);
+      // notify parent to re-apply overlays if needed
+      widget.onStyleChanged?.call();
+    } else {
+      try {
+        // ✅ Add hosted vector tileset as source
+        await mapboxMap.style.addSource(
+          VectorSource(
+            id: 'flood_source',
+            url: 'mapbox://johncarlo123.pampanga-flood-map',
+          ),
+        );
+
+        // 🗺️ Add categorized layers by `Var` property (note uppercase V)
+        await mapboxMap.style.addLayer(
+          FillLayer(
+            id: 'flood-layer-var1',
+            sourceId: 'flood_source',
+            sourceLayer: 'flood', // must match Mapbox
+            filter: ['==', ['get', 'Var'], 1], // property name is Var
+            fillColor: Colors.yellow.withValues(alpha: .6).toARGB32(),
+          ),
+        );
+
+        await mapboxMap.style.addLayer(
+          FillLayer(
+            id: 'flood-layer-var2',
+            sourceId: 'flood_source',
+            sourceLayer: 'flood',
+            filter: ['==', ['get', 'Var'], 2],
+            fillColor: Colors.orange.withValues(alpha: 0.6).toARGB32(),
+          ),
+        );
+
+        await mapboxMap.style.addLayer(
+          FillLayer(
+            id: 'flood-layer-var3',
+            sourceId: 'flood_source',
+            sourceLayer: 'flood',
+            filter: ['==', ['get', 'Var'], 3],
+            fillColor: Colors.red.withValues(alpha: 0.6).toARGB32(),
+          ),
+        );
+
+        setState(() => _isFloodLayerVisible = true);
+        debugPrint('✅ Flood layer loaded successfully.');
+        // Let parent re-apply overlays (like realtime flood polygon) so they sit above these layers
+        widget.onStyleChanged?.call();
+      } catch (e, st) {
+        debugPrint('❌ Failed to load flood layer: $e\n$st');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to add flood layer')),
+        );
+      }
     }
   }
 

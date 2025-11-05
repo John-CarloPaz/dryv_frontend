@@ -5,6 +5,7 @@ class SearchBarWidget extends StatelessWidget {
   final TextEditingController? controller;
   final ValueChanged<String>? onChanged;
   final bool readOnly;
+  final String? hintText;
 
   const SearchBarWidget({
     super.key,
@@ -12,6 +13,7 @@ class SearchBarWidget extends StatelessWidget {
     this.controller,
     this.onChanged,
     this.readOnly = true,
+    this.hintText,
   });
 
   @override
@@ -41,13 +43,13 @@ class SearchBarWidget extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: AbsorbPointer(
-                    absorbing: readOnly, // when true, TextField won't steal taps
+                    absorbing: readOnly,
                     child: TextField(
                       controller: controller,
                       onChanged: onChanged,
                       readOnly: readOnly,
-                      decoration: const InputDecoration(
-                        hintText: 'Search here...',
+                      decoration: InputDecoration(
+                        hintText: hintText ?? 'Search here...',
                         border: InputBorder.none,
                         isDense: true,
                       ),
