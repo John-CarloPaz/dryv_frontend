@@ -2,7 +2,7 @@ name: dryvmobapp
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
 # A version number is three numbers separated by dots, like 1.2.43
@@ -30,18 +30,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_riverpod: ^3.0.3
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  flutter_riverpod: ^3.0.3
   http: ^1.2.1
   mapbox_maps_flutter: ^2.0.0
   flutter_native_splash: ^2.4.7
   flutter_dotenv: ^6.0.0
   uuid: ^4.4.2
   flutter_launcher_icons: "^0.14.4"
-    
 
 dev_dependencies:
   flutter_test:
@@ -54,7 +53,6 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
   custom_lint: ^0.8.0
-  riverpod_lint: ^3.0.3
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -65,10 +63,10 @@ flutter:
   assets:
     - lib/assets/images/splash-logo.png
     - .env
-  
+
 flutter_native_splash:
-  color: "#ffffff"            
-  image: lib/assets/images/splash-logo.png   
+  color: "#ffffff"
+  image: lib/assets/images/splash-logo.png
   android_12:
     image: lib/assets/images/splash-logo.png
     icon_background_color: "#ffffff"
@@ -78,19 +76,17 @@ flutter_native_splash:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: lib/assets/images/splash-logo.png  
+  image_path: lib/assets/images/splash-logo.png
   min_sdk_android: 21 # android min sdk min:16, default 21
   web:
     generate: true
-    image_path: lib/assets/images/splash-logo.png  
+    image_path: lib/assets/images/splash-logo.png
     background_color: "#ffffff"
     theme_color: "#ffffff"
   windows:
     generate: true
-    image_path: lib/assets/images/splash-logo.png  
+    image_path: lib/assets/images/splash-logo.png
     icon_size: 48 # min:48, max:256, default: 48
   macos:
     generate: true
-    image_path: lib/assets/images/splash-logo.png  
-
-  
+    image_path: lib/assets/images/splash-logo.png
