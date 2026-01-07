@@ -1,5 +1,5 @@
 name: dryvmobapp
-description: "A new Flutter project."
+description: "A flood-aware navigation app."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -37,6 +37,7 @@ dependencies:
   flutter_riverpod: ^3.0.3
   http: ^1.2.1
   mapbox_maps_flutter: ^2.0.0
+  permission_handler: ^11.4.0
   flutter_native_splash: ^2.4.7
   flutter_dotenv: ^6.0.0
   uuid: ^4.4.2

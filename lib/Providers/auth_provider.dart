@@ -1,5 +1,15 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-// Simple in-memory auth token provider. This uses a StateProvider so it
-// doesn't rely on StateNotifier types which may vary between Riverpod versions.
-final authProvider = StateProvider<String?>((ref) => null);
+class AuthTokenNotifier extends Notifier<String?> {
+	@override
+	String? build() => null;
+
+	void setToken(String? token) => state = token;
+
+	void clear() => state = null;
+}
+
+// Simple in-memory auth token provider.
+final authProvider = NotifierProvider<AuthTokenNotifier, String?>(
+	AuthTokenNotifier.new,
+);
