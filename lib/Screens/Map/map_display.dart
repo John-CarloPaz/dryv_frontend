@@ -1,10 +1,16 @@
 import 'package:dryvmobapp/Screens/Search/search_screen.dart';
+import 'package:dryvmobapp/Services/backend_routing_service.dart';
 import 'package:dryvmobapp/Services/location_service.dart';
+import 'package:dryvmobapp/Services/mapbox_navigation_channel.dart';
+import 'package:dryvmobapp/Services/app_file_logger.dart';
+import 'dart:convert';
 import 'package:dryvmobapp/Widgets/grouped_buttons.dart';
 import 'package:dryvmobapp/Widgets/location_details.dart';
 import 'package:dryvmobapp/Widgets/search_bar.dart';
+import 'package:dryvmobapp/Widgets/safest_route_loading.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 class MapScreen extends StatefulWidget {
@@ -210,8 +216,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           name: name,
           address: result['address'] ?? '',
           onNavigate: () {
-            // Implement navigation action (open external maps or start route)
             sheetController?.close();
+            _requestAndPreviewBackendRoute(
+              destination: LatLng(lat: lat, lng: lng),
+              destinationName: name,
+            );
           },
           onSave: () {
             // Implement save/bookmark behavior
@@ -230,6 +239,182 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         );
       });
     }
+  }
+
+  Future<void> _requestAndPreviewBackendRoute({
+    required LatLng destination,
+    required String destinationName,
+  }) async {
+    if (!mounted) return;
+
+    // Require location services + permission (origin must be correct for safety).
+    final servicesEnabled = await LocationService.ensureLocationServicesEnabled(context);
+    if (!servicesEnabled) return;
+    final permissionGranted = await LocationService.ensureLocationPermission(context);
+    if (!permissionGranted) return;
+
+    // 1) Obtain an origin (current device location) to send to backend.
+    final originMap = await LocationService.getLastKnownLocation();
+    if (originMap == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unable to determine your current location. Enable location and try again.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final origin = LatLng(lat: originMap['lat']!, lng: originMap['lng']!);
+
+    // 2) Build backend endpoint from env; fail fast if not configured.
+    final baseUrl = dotenv.env['API_BASE_URL'];
+    final fallbackEndpoint = (baseUrl == null || baseUrl.trim().isEmpty)
+        ? null
+        : '${baseUrl.replaceAll(RegExp(r"/+$"), "")}/route/safe';
+
+    final endpoint = (dotenv.env['DRYV_SAFEST_ROUTE_URL']?.trim().isNotEmpty == true)
+        ? dotenv.env['DRYV_SAFEST_ROUTE_URL']
+        : fallbackEndpoint;
+
+    if (endpoint == null || endpoint.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Backend route URL not configured. Set API_BASE_URL or DRYV_SAFEST_ROUTE_URL in .env'),
+        ),
+      );
+      return;
+    }
+
+    final service = BackendRoutingService(
+      safestRouteEndpoint: Uri.parse(endpoint),
+    );
+
+    AppFileLogger.instance.info('Navigate tapped: using backend endpoint=$endpoint');
+
+    // 3) Show full-screen loading UI while waiting for backend response.
+    // We push the overlay route *without awaiting* and then run the request.
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: true,
+        pageBuilder: (_, __, ___) => const SafestRouteLoadingOverlay(),
+      ),
+    );
+
+    AppFileLogger.instance.info('Showing SafestRouteLoadingOverlay');
+
+    // Ensure the overlay is on the stack before we start, so a `pop()` closes it.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+
+    await _fetchRouteWhileShowingLoader(
+      service: service,
+      origin: origin,
+      destination: destination,
+      destinationName: destinationName,
+    );
+  }
+
+  /// NOTE: This method is split out so we can show a full-screen loading overlay
+  /// while the backend request is inflight.
+  Future<void> _fetchRouteWhileShowingLoader({
+    required BackendRoutingService service,
+    required LatLng origin,
+    required LatLng destination,
+    required String destinationName,
+  }) async {
+    late final BackendApprovedRoute approved;
+    try {
+      approved = await service.fetchSafestRoute(origin: origin, destination: destination);
+    } on BackendRoutingException catch (e) {
+      AppFileLogger.instance.warn('Safest route backend exception: ${e.code} ${e.message}');
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+      return;
+    } catch (e) {
+      AppFileLogger.instance.error('Safest route unexpected error', err: e);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to calculate safest route: $e')),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    // 4) Push backend-approved coordinates to Android via MethodChannel.
+    // Prefer the backend geometry linepoints (if provided) so preview matches backend path.
+    // Fallback: use backend waypoints.
+    final coords = _tryExtractLineStringCoordinates(approved.geometryGeoJson) ?? approved.waypoints;
+    final waypointIndices = <int>[0, coords.length - 1];
+
+    AppFileLogger.instance.info(
+      'Sending backend coordinates to Android for preview: coords=${coords.length} (fromGeometry=${coords != approved.waypoints})',
+    );
+
+    await MapboxNavigationChannel.setApprovedRoute(
+      coordinates: coords,
+      waypointIndices: waypointIndices,
+      originLabel: 'Your location',
+      destinationLabel: destinationName,
+      distanceMeters: approved.distanceMeters,
+      durationSeconds: approved.durationSeconds,
+      maxRiskLevel: approved.maxRiskLevel,
+    );
+
+    AppFileLogger.instance.info('Approved waypoints sent to Android; opening native preview');
+
+    if (!mounted) return;
+    try {
+      await MapboxNavigationChannel.startNavigation();
+    } on PlatformException catch (e) {
+      AppFileLogger.instance.warn(
+        'Native navigation PlatformException: ${e.code} ${e.message ?? ''}',
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? e.code)),
+      );
+    }
+  }
+
+  List<LatLng>? _tryExtractLineStringCoordinates(dynamic geometryGeoJson) {
+    try {
+      dynamic obj = geometryGeoJson;
+      if (obj is String) {
+        obj = jsonDecode(obj);
+      }
+
+      if (obj is Map) {
+        dynamic geom = obj;
+        if (obj['type'] == 'Feature' && obj['geometry'] is Map) {
+          geom = obj['geometry'];
+        }
+        if (geom is Map && geom['type'] == 'LineString' && geom['coordinates'] is List) {
+          final coords = geom['coordinates'] as List;
+          final out = <LatLng>[];
+          for (final c in coords) {
+            if (c is List && c.length >= 2) {
+              final lng = c[0];
+              final lat = c[1];
+              if (lng is num && lat is num) {
+                out.add(LatLng(lat: lat.toDouble(), lng: lng.toDouble()));
+              }
+            }
+          }
+          return out.length >= 2 ? out : null;
+        }
+      }
+    } catch (_) {
+      // Best-effort only.
+    }
+    return null;
   }
 
   @override
