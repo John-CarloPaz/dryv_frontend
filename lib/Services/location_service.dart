@@ -12,6 +12,28 @@ import 'package:permission_handler/permission_handler.dart';
 class LocationService {
   static const MethodChannel _platformChannel = MethodChannel('dryv/platform');
 
+  /// Returns the device last-known location from the host platform.
+  ///
+  /// SAFETY:
+  /// - Used only to determine origin sent to the backend.
+  /// - We do not compute or alter routes on-device.
+  static Future<Map<String, double>?> getLastKnownLocation() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final result = await _platformChannel
+          .invokeMapMethod<String, dynamic>('getLastKnownLocation');
+      if (result == null) return null;
+
+      final lat = result['lat'];
+      final lng = result['lng'];
+      if (lat is! num || lng is! num) return null;
+
+      return {'lat': lat.toDouble(), 'lng': lng.toDouble()};
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<bool> isLocationServicesEnabled() async {
     try {
       final serviceStatus = await Permission.location.serviceStatus;

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      Mapbox Navigation SDK (native) reads the token from this Android string resource.
+      This can be the same public token you use at runtime (often starts with pk.).
+
+      IMPORTANT: This is different from MAPBOX_DOWNLOADS_TOKEN (secret, used only to download Maven artifacts).
+
+      Replace the placeholder below with your Mapbox public access token.
+    -->
+    <string name="mapbox_access_token" translatable="false" tools:ignore="UnusedResources">pk.eyJ1Ijoiam9obmNhcmxvMTIzIiwiYSI6ImNtZzZrc2ZlYTBkeWwyam9pazVyc3JidWsifQ.Ydw0vEApWWCIPiZ0S1FiRw</string>
+</resources>
