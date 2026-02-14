@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-import 'package:dryvmobapp/Services/mapbox_navigation_channel.dart';
+import 'package:dryvmobapp/Models/lat_lng.dart';
 import 'package:dryvmobapp/Services/app_file_logger.dart';
 
 class BackendRoutingException implements Exception {
@@ -74,12 +74,17 @@ class BackendRoutingService {
         'No route to host / cannot connect to $host:$port. ${e.message}. $hints',
       );
     } catch (e) {
-      AppFileLogger.instance.error('Backend unreachable: endpoint=$safestRouteEndpoint', err: e);
+      AppFileLogger.instance.error(
+        'Backend unreachable: endpoint=$safestRouteEndpoint',
+        err: e,
+      );
       throw BackendRoutingException('BACKEND_UNREACHABLE', e.toString());
     }
 
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      final snippet = resp.body.length > 800 ? '${resp.body.substring(0, 800)}...' : resp.body;
+      final snippet = resp.body.length > 800
+          ? '${resp.body.substring(0, 800)}...'
+          : resp.body;
       AppFileLogger.instance.error(
         'Backend HTTP error: status=${resp.statusCode} body=$snippet',
       );
@@ -89,50 +94,98 @@ class BackendRoutingService {
       );
     }
 
-    AppFileLogger.instance.info('Backend response OK (bytes=${resp.body.length}).');
+    AppFileLogger.instance.info(
+      'Backend response OK (bytes=${resp.body.length}).',
+    );
 
     final decoded = jsonDecode(resp.body);
     if (decoded is! Map<String, dynamic>) {
       AppFileLogger.instance.error('Backend invalid JSON: not an object');
-      throw BackendRoutingException('BACKEND_INVALID_JSON', 'Expected JSON object');
+      throw BackendRoutingException(
+        'BACKEND_INVALID_JSON',
+        'Expected JSON object',
+      );
     }
 
+    // Backwards-compatible status handling.
+    // Old backend: { status: 'ok', route: {...} }
+    // New backend: { code: 'Ok', routes: [...], waypoints: [...] }
     final status = decoded['status'];
-    if (status != 'ok') {
-      AppFileLogger.instance.error('Backend status not ok: status=$status');
-      throw BackendRoutingException('BACKEND_STATUS_NOT_OK', 'status=$status');
+    final code = decoded['code'];
+    final ok =
+        (status is String && status.toLowerCase() == 'ok') ||
+        (code is String && code.toLowerCase() == 'ok');
+    if (!ok) {
+      AppFileLogger.instance.error(
+        'Backend status not ok: status=$status code=$code',
+      );
+      throw BackendRoutingException(
+        'BACKEND_STATUS_NOT_OK',
+        'status=$status code=$code',
+      );
     }
 
-    final route = decoded['route'];
-    if (route is! Map<String, dynamic>) {
-      AppFileLogger.instance.error('Backend missing route object');
-      throw BackendRoutingException('BACKEND_MISSING_ROUTE', 'Missing route object');
+    // Old backend wrapped route under `route`, new backend returns route payload at top-level.
+    final dynamic routeCandidate = decoded['route'] is Map<String, dynamic>
+        ? decoded['route']
+        : decoded;
+    if (routeCandidate is! Map<String, dynamic>) {
+      AppFileLogger.instance.error('Backend missing route payload');
+      throw BackendRoutingException(
+        'BACKEND_MISSING_ROUTE',
+        'Missing route payload',
+      );
     }
+
+    final route = routeCandidate;
 
     final waypointsRaw = route['waypoints'];
     if (waypointsRaw is! List) {
-      throw BackendRoutingException('BACKEND_MISSING_WAYPOINTS', 'Missing waypoints');
+      throw BackendRoutingException(
+        'BACKEND_MISSING_WAYPOINTS',
+        'Missing waypoints',
+      );
     }
 
     final waypoints = <LatLng>[];
     int? maxRiskLevel;
     for (final w in waypointsRaw) {
       if (w is! Map) continue;
+
+      // Old shape: { lat: <num>, lng: <num>, ... }
+      // New shape: { name: <str>, location: [<lng>, <lat>] }
       final lat = w['lat'];
       final lng = w['lng'];
       if (lat is num && lng is num) {
         waypoints.add(LatLng(lat: lat.toDouble(), lng: lng.toDouble()));
+      } else {
+        final loc = w['location'] ?? w['coordinates'];
+        if (loc is List && loc.length >= 2) {
+          final locLng = loc[0];
+          final locLat = loc[1];
+          if (locLat is num && locLng is num) {
+            waypoints.add(
+              LatLng(lat: locLat.toDouble(), lng: locLng.toDouble()),
+            );
+          }
+        }
       }
 
       final risk = _tryParseRiskLevel(w);
       if (risk != null) {
-        maxRiskLevel = maxRiskLevel == null ? risk : (risk > maxRiskLevel! ? risk : maxRiskLevel);
+        final currentMax = maxRiskLevel;
+        maxRiskLevel = currentMax == null
+            ? risk
+            : (risk > currentMax ? risk : currentMax);
       }
     }
 
     if (waypoints.length < 2) {
       AppFileLogger.instance.error('Backend returned <2 waypoints');
-      throw BackendRoutingException('NO_SAFE_ROUTE', 'Backend returned <2 waypoints');
+      throw BackendRoutingException(
+        'NO_SAFE_ROUTE',
+        'Backend returned <2 waypoints',
+      );
     }
 
     // NOTE:
@@ -152,7 +205,10 @@ class BackendRoutingService {
     final routesRaw = route['routes'];
     if (routesRaw is! List || routesRaw.isEmpty || routesRaw.first is! Map) {
       AppFileLogger.instance.error('Backend missing routes array');
-      throw BackendRoutingException('BACKEND_MISSING_ROUTES', 'Missing routes array');
+      throw BackendRoutingException(
+        'BACKEND_MISSING_ROUTES',
+        'Missing routes array',
+      );
     }
 
     final primaryRoute = routesRaw.first as Map;
@@ -163,31 +219,44 @@ class BackendRoutingService {
     final durationSeconds = _tryParseDouble(primaryRoute['duration']);
 
     // Some backends send max risk at the route-level too.
+    final meta = route['_meta'];
     final routeMaxRisk = _tryParseInt(
       route['max_risk_level'] ??
           route['maxRiskLevel'] ??
+          (meta is Map
+              ? meta['max_risk_level'] ?? meta['maxRiskLevel']
+              : null) ??
           primaryRoute['max_risk_level'] ??
           primaryRoute['maxRiskLevel'],
     );
     if (routeMaxRisk != null) {
-      maxRiskLevel = maxRiskLevel == null
+      final currentMax = maxRiskLevel;
+      maxRiskLevel = currentMax == null
           ? routeMaxRisk
-          : (routeMaxRisk > maxRiskLevel! ? routeMaxRisk : maxRiskLevel);
+          : (routeMaxRisk > currentMax ? routeMaxRisk : currentMax);
     }
 
-    // Optional but required for native turn-by-turn guidance.
-    final directionsRouteJson = _extractDirectionsRouteJson(primaryRoute);
+    // Persist legs/steps/maneuvers for custom Flutter-side turn-by-turn.
+    // Prefer `routes[0].legs`, but fall back to decoding directions_route_json /
+    // directions_route if legs aren't present at the top level.
+    final primaryRouteRaw = Map<String, dynamic>.from(primaryRoute);
+    final primaryRouteRawJson = jsonEncode(primaryRouteRaw);
+
+    final stepsJson = _extractStepsJson(primaryRouteRaw);
+
     AppFileLogger.instance.info(
-      'Backend route parsed: waypoints=${waypoints.length} hasDirectionsRouteJson=${directionsRouteJson != null}',
+      'Backend route parsed: waypoints=${waypoints.length} stepsJson=${stepsJson?.length ?? 0}',
     );
 
     return BackendApprovedRoute(
       waypoints: waypoints,
       geometryGeoJson: geometry,
-      directionsRouteJson: directionsRouteJson,
       distanceMeters: distanceMeters,
       durationSeconds: durationSeconds,
       maxRiskLevel: maxRiskLevel,
+      primaryRouteRawJson: primaryRouteRawJson,
+      primaryRouteRaw: primaryRouteRaw,
+      stepsJson: stepsJson,
     );
   }
 
@@ -197,21 +266,61 @@ class BackendRoutingService {
     return (a.lat - b.lat).abs() < eps && (a.lng - b.lng).abs() < eps;
   }
 
-  String? _extractDirectionsRouteJson(Map primaryRoute) {
-    final candidate = primaryRoute['directions_route_json'];
-    if (candidate is String && candidate.trim().isNotEmpty) return candidate;
+  List<Map<String, dynamic>>? _extractStepsJson(Map<String, dynamic> primaryRoute) {
+    List<dynamic>? legs;
 
-    final nested = primaryRoute['directionsRouteJson'];
-    if (nested is String && nested.trim().isNotEmpty) return nested;
+    final directLegs = primaryRoute['legs'];
+    if (directLegs is List) {
+      legs = directLegs;
+    }
 
-    final obj = primaryRoute['directions_route'];
-    if (obj is Map) return jsonEncode(obj);
+    // If legs are absent, optionally fall back to directions_route(_json)
+    // depending on how the backend payload is shaped.
+    if (legs == null || legs.isEmpty) {
+      Map<String, dynamic>? directionsRoute;
 
-    return null;
+      final directionsRouteObj = primaryRoute['directions_route'];
+      if (directionsRouteObj is Map) {
+        directionsRoute = Map<String, dynamic>.from(directionsRouteObj);
+      } else {
+        final candidate =
+            primaryRoute['directions_route_json'] ?? primaryRoute['directionsRouteJson'];
+        if (candidate is String && candidate.trim().isNotEmpty) {
+          try {
+            final dyn = jsonDecode(candidate);
+            if (dyn is Map<String, dynamic>) directionsRoute = dyn;
+          } catch (_) {
+            // Ignore decode issues; step storage remains null.
+          }
+        }
+      }
+
+      final fallbackLegs = directionsRoute?['legs'];
+      if (fallbackLegs is List) {
+        legs = fallbackLegs;
+      }
+    }
+
+    if (legs == null || legs.isEmpty) return null;
+    final leg0 = legs.first;
+    if (leg0 is! Map) return null;
+
+    final stepsRaw = leg0['steps'];
+    if (stepsRaw is! List) return null;
+
+    final stepsJson = <Map<String, dynamic>>[];
+    for (final step in stepsRaw) {
+      if (step is Map) {
+        stepsJson.add(Map<String, dynamic>.from(step));
+      }
+    }
+
+    return stepsJson;
   }
 
   int? _tryParseRiskLevel(Map w) {
-    final candidate = w['risk_level'] ?? w['riskLevel'] ?? w['risk'] ?? w['riskLevelValue'];
+    final candidate =
+        w['risk_level'] ?? w['riskLevel'] ?? w['risk'] ?? w['riskLevelValue'];
     return _tryParseInt(candidate);
   }
 
@@ -244,8 +353,10 @@ class BackendApprovedRoute {
   /// or a pre-serialized string.
   final dynamic geometryGeoJson;
 
-  /// Mapbox DirectionsRoute JSON string (required to start native turn-by-turn).
-  final String? directionsRouteJson;
+  /// Raw steps list for custom Flutter-side turn-by-turn.
+  ///
+  /// Source: `routes[0].legs[0].steps` (or decoded from directions_route(_json)).
+  final List<Map<String, dynamic>>? stepsJson;
 
   /// Optional distance summary in meters.
   final double? distanceMeters;
@@ -256,12 +367,24 @@ class BackendApprovedRoute {
   /// Max risk level derived from waypoint risk fields (or route-level field, if present).
   final int? maxRiskLevel;
 
+  /// Raw `routes[0]` payload (decoded JSON map) returned by the backend.
+  ///
+  /// This is used for custom Flutter-side turn-by-turn (without Mapbox Nav SDK).
+  final Map<String, dynamic>? primaryRouteRaw;
+
+  /// Raw `routes[0]` payload, serialized as JSON.
+  ///
+  /// Useful for persistence / logging / debugging.
+  final String? primaryRouteRawJson;
+
   const BackendApprovedRoute({
     required this.waypoints,
     required this.geometryGeoJson,
-    required this.directionsRouteJson,
     required this.distanceMeters,
     required this.durationSeconds,
     required this.maxRiskLevel,
+    this.primaryRouteRaw,
+    this.primaryRouteRawJson,
+    this.stepsJson,
   });
 }

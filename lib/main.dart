@@ -7,7 +7,6 @@ import 'package:dryvmobapp/Screens/Search/search_screen.dart';
 
 import 'package:dryvmobapp/Services/app_file_logger.dart';
 
-
 // Screens
 import 'package:dryvmobapp/Screens/Map/map_display.dart';
 
@@ -17,7 +16,9 @@ void main() async {
 
   // Init file logging early for on-device debugging.
   await AppFileLogger.instance.init();
-  AppFileLogger.instance.info('App starting. logFilePath=${AppFileLogger.instance.logFilePath ?? "(none)"}');
+  AppFileLogger.instance.info(
+    'App starting. logFilePath=${AppFileLogger.instance.logFilePath ?? "(none)"}',
+  );
 
   // Capture framework errors.
   FlutterError.onError = (details) {
@@ -38,7 +39,9 @@ void main() async {
   final accessToken = dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '';
   MapboxOptions.setAccessToken(accessToken);
   if (kDebugMode) {
-    AppFileLogger.instance.info('Mapbox access token configured (length=${accessToken.length}).');
+    AppFileLogger.instance.info(
+      'Mapbox access token configured (length=${accessToken.length}).',
+    );
   }
 
   runApp(const MyApp());
@@ -50,29 +53,24 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.light(
-        primary: Colors.grey.shade800,
-        onSurfaceVariant: Colors.grey.shade500,
-        surface: Colors.white,
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.light(
+          primary: Colors.grey.shade800,
+          onSurfaceVariant: Colors.grey.shade500,
+          surface: Colors.white,
+        ),
+        bottomNavigationBarTheme: BottomNavigationBarThemeData(
+          backgroundColor: Colors.white,
+          selectedItemColor: Colors.grey.shade800,
+          unselectedItemColor: Colors.grey.shade500,
+          type: BottomNavigationBarType.fixed,
+        ),
       ),
-      bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: Colors.white,
-        selectedItemColor: Colors.grey.shade800,
-        unselectedItemColor: Colors.grey.shade500,
-        type: BottomNavigationBarType.fixed,
+      home: const BottomNavWidget(
+        pages: [MapScreen(), SearchScreen(), Placeholder(), Placeholder()],
       ),
-    ),
-    home: const BottomNavWidget(
-      pages: [
-        MapScreen(),
-        SearchScreen(),
-        Placeholder(),
-        Placeholder(),
-      ],
-    ),
-  );
+    );
   }
 }

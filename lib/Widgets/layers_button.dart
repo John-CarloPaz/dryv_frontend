@@ -1,10 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
+class FloodOverlayVisibility {
+  final bool floodMap;
+  final bool realtimeFlood;
+
+  const FloodOverlayVisibility({
+    required this.floodMap,
+    required this.realtimeFlood,
+  });
+
+  bool get any => floodMap || realtimeFlood;
+}
+
 class LayerButtonWidget extends StatefulWidget {
   final MapboxMap mapboxMap;
   final VoidCallback? onStyleChanged;
-  const LayerButtonWidget({super.key, required this.mapboxMap, this.onStyleChanged});
+  final ValueChanged<FloodOverlayVisibility>? onFloodOverlayVisibilityChanged;
+  const LayerButtonWidget({
+    super.key,
+    required this.mapboxMap,
+    this.onStyleChanged,
+    this.onFloodOverlayVisibilityChanged,
+  });
 
   @override
   State<LayerButtonWidget> createState() => _LayerButtonWidgetState();
@@ -14,6 +32,85 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   bool _isFloodLayerVisible = false;
   bool _isRealtimeFloodLayerVisible = false;
 
+  void _notifyOverlayVisibility() {
+    widget.onFloodOverlayVisibilityChanged?.call(
+      FloodOverlayVisibility(
+        floodMap: _isFloodLayerVisible,
+        realtimeFlood: _isRealtimeFloodLayerVisible,
+      ),
+    );
+  }
+
+  bool _looksLikeLabelLayer(String id, String? type) {
+    final t = (type ?? '').toLowerCase();
+    if (t == 'symbol') return true;
+    final lower = id.toLowerCase();
+    return lower.contains('label') ||
+        lower.contains('poi') ||
+        lower.contains('place') ||
+        lower.contains('settlement');
+  }
+
+  bool _looksLikeLocationLayer(String id) {
+    final lower = id.toLowerCase();
+    return lower.contains('location') ||
+        lower.contains('puck') ||
+        lower.contains('mapbox-location');
+  }
+
+  Future<String?> _findOverlayAnchorLayerId() async {
+    // We want flood overlays below map labels/POIs and below the location puck.
+    // On classic styles (streets/satellite-streets), `slot` is ignored, so we
+    // must insert layers explicitly using LayerPosition.
+    final layers = await widget.mapboxMap.style.getStyleLayers();
+
+    int? firstLabelIndex;
+    int? firstLocationIndex;
+
+    for (var i = 0; i < layers.length; i++) {
+      final layer = layers[i] as dynamic;
+      final id = (layer.id as String?) ?? '';
+      if (id.isEmpty) continue;
+
+      final type = layer.type as String?;
+
+      if (firstLabelIndex == null && _looksLikeLabelLayer(id, type)) {
+        firstLabelIndex = i;
+      }
+      if (firstLocationIndex == null && _looksLikeLocationLayer(id)) {
+        firstLocationIndex = i;
+      }
+
+      if (firstLabelIndex != null && firstLocationIndex != null) break;
+    }
+
+    int? anchorIndex;
+    if (firstLabelIndex != null && firstLocationIndex != null) {
+      anchorIndex = firstLabelIndex < firstLocationIndex
+          ? firstLabelIndex
+          : firstLocationIndex;
+    } else {
+      anchorIndex = firstLabelIndex ?? firstLocationIndex;
+    }
+
+    if (anchorIndex == null) return null;
+    final anchor = layers[anchorIndex] as dynamic;
+    return anchor.id as String?;
+  }
+
+  Future<LayerPosition?> _overlayBaseLayerPosition() async {
+    final anchorId = await _findOverlayAnchorLayerId();
+    if (anchorId == null || anchorId.isEmpty) return null;
+    return LayerPosition(below: anchorId);
+  }
+
+  void _showMutualExclusionSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   void _showLayerDrawer(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -22,6 +119,9 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
+        final floodDisabled = _isRealtimeFloodLayerVisible;
+        final realtimeDisabled = _isFloodLayerVisible;
+
         return Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
@@ -45,31 +145,53 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
                 leading: const Icon(Icons.terrain),
                 title: const Text('Satellite View'),
                 onTap: () {
-                  _changeMapStyle('mapbox://styles/mapbox/satellite-streets-v12');
+                  _changeMapStyle(
+                    'mapbox://styles/mapbox/satellite-streets-v12',
+                  );
                   Navigator.pop(context);
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.water),
+              SwitchListTile(
+                secondary: Icon(
+                  Icons.water,
+                  color: floodDisabled ? Colors.grey : null,
+                ),
                 title: const Text('Flood Map Layer'),
-                onTap: () {
-                  _toggleFloodLayer();
-                  Navigator.pop(context);
-                },
+                subtitle: floodDisabled
+                    ? const Text('Turn off Realtime Flood Layer to enable')
+                    : null,
+                value: _isFloodLayerVisible,
+                onChanged: floodDisabled
+                    ? null
+                    : (value) async {
+                        await _toggleFloodLayer();
+                        if (context.mounted) Navigator.pop(context);
+                      },
               ),
-              ListTile(
-                leading: const Icon(Icons.waves),
+              SwitchListTile(
+                secondary: Icon(
+                  Icons.waves,
+                  color: realtimeDisabled ? Colors.grey : null,
+                ),
                 title: const Text('Realtime Flood Layer'),
-                onTap: () {
-                  _toggleRealtimeFloodLayer();
-                  Navigator.pop(context);
-                },
+                subtitle: realtimeDisabled
+                    ? const Text('Turn off Flood Map Layer to enable')
+                    : null,
+                value: _isRealtimeFloodLayerVisible,
+                onChanged: realtimeDisabled
+                    ? null
+                    : (value) async {
+                        await _toggleRealtimeFloodLayer();
+                        if (context.mounted) Navigator.pop(context);
+                      },
               ),
             ],
           ),
         );
       },
     );
+
+    if (!mounted) return;
   }
 
   Future<void> _changeMapStyle(String styleUrl) async {
@@ -83,6 +205,11 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   }
 
   Future<void> _reapplyEnabledOverlays() async {
+    // Enforce mutual exclusivity (defensive: older builds may have allowed both).
+    if (_isFloodLayerVisible && _isRealtimeFloodLayerVisible) {
+      setState(() => _isRealtimeFloodLayerVisible = false);
+      _notifyOverlayVisibility();
+    }
     if (_isFloodLayerVisible) {
       await _addFloodLayer();
     }
@@ -102,7 +229,9 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       if (exists) await mapboxMap.style.removeStyleLayer(id);
     }
 
-    final sourceExists = await mapboxMap.style.styleSourceExists('flood_source');
+    final sourceExists = await mapboxMap.style.styleSourceExists(
+      'flood_source',
+    );
     if (sourceExists) await mapboxMap.style.removeStyleSource('flood_source');
   }
 
@@ -120,38 +249,54 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       ),
     );
 
-    // Categorized layers by `Var` property (note uppercase V)
-    await mapboxMap.style.addLayer(
-      FillLayer(
-        id: 'flood-layer-var1',
-        slot: 'top',
-        sourceId: 'flood_source',
-        sourceLayer: 'flood',
-        filter: ['==', ['get', 'Var'], 1],
-        fillColor: Colors.yellow.withValues(alpha: .6).toARGB32(),
-      ),
-    );
+    final basePosition = await _overlayBaseLayerPosition();
 
-    await mapboxMap.style.addLayer(
+    // Categorized layers by `Var` property (note uppercase V)
+    final floodVar1 = FillLayer(
+      id: 'flood-layer-var1',
+      sourceId: 'flood_source',
+      sourceLayer: 'flood',
+      filter: [
+        '==',
+        ['get', 'Var'],
+        1,
+      ],
+      fillColor: Colors.yellow.withValues(alpha: .6).toARGB32(),
+    );
+    if (basePosition != null) {
+      await mapboxMap.style.addLayerAt(floodVar1, basePosition);
+    } else {
+      await mapboxMap.style.addLayer(floodVar1);
+    }
+
+    await mapboxMap.style.addLayerAt(
       FillLayer(
         id: 'flood-layer-var2',
-        slot: 'top',
         sourceId: 'flood_source',
         sourceLayer: 'flood',
-        filter: ['==', ['get', 'Var'], 2],
+        filter: [
+          '==',
+          ['get', 'Var'],
+          2,
+        ],
         fillColor: Colors.orange.withValues(alpha: 0.6).toARGB32(),
       ),
+      LayerPosition(above: 'flood-layer-var1'),
     );
 
-    await mapboxMap.style.addLayer(
+    await mapboxMap.style.addLayerAt(
       FillLayer(
         id: 'flood-layer-var3',
-        slot: 'top',
         sourceId: 'flood_source',
         sourceLayer: 'flood',
-        filter: ['==', ['get', 'Var'], 3],
+        filter: [
+          '==',
+          ['get', 'Var'],
+          3,
+        ],
         fillColor: Colors.red.withValues(alpha: 0.6).toARGB32(),
       ),
+      LayerPosition(above: 'flood-layer-var2'),
     );
   }
 
@@ -160,16 +305,25 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       await _removeFloodLayer();
 
       setState(() => _isFloodLayerVisible = false);
+      _notifyOverlayVisibility();
       // notify parent to re-apply overlays if needed
       widget.onStyleChanged?.call();
     } else {
+      if (_isRealtimeFloodLayerVisible) {
+        _showMutualExclusionSnackBar(
+          'Turn off Realtime Flood Layer before enabling Flood Map Layer.',
+        );
+        return;
+      }
       try {
         await _addFloodLayer();
 
         setState(() => _isFloodLayerVisible = true);
+        _notifyOverlayVisibility();
         debugPrint('✅ Flood tileset layer loaded (Pampanga).');
       } catch (e, st) {
         debugPrint('❌ Failed to load flood tileset layer: $e\n$st');
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to add flood tileset layer')),
         );
@@ -198,17 +352,29 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       if (sourceExists) await mapboxMap.style.removeStyleSource(sourceId);
 
       setState(() => _isRealtimeFloodLayerVisible = false);
+      _notifyOverlayVisibility();
       widget.onStyleChanged?.call();
+      return;
+    }
+
+    if (_isFloodLayerVisible) {
+      _showMutualExclusionSnackBar(
+        'Turn off Flood Map Layer before enabling Realtime Flood Layer.',
+      );
       return;
     }
 
     try {
       await _addRealtimeFloodLayer();
       setState(() => _isRealtimeFloodLayerVisible = true);
+      _notifyOverlayVisibility();
       debugPrint('✅ Realtime flood layer loaded from dryv_b.');
       widget.onStyleChanged?.call();
     } catch (ePrimary, stPrimary) {
-      debugPrint('❌ Failed to load realtime dryv_b tileset: $ePrimary\n$stPrimary');
+      debugPrint(
+        '❌ Failed to load realtime dryv_b tileset: $ePrimary\n$stPrimary',
+      );
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to add realtime flood layer')),
       );
@@ -249,54 +415,67 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     await _removeRealtimeFloodLayer();
 
     await mapboxMap.style.addSource(
-      VectorSource(
-        id: sourceId,
-        url: primaryTilesetUrl,
-      ),
+      VectorSource(id: sourceId, url: primaryTilesetUrl),
     );
 
-    await mapboxMap.style.addLayer(
-      FillLayer(
-        id: fillLayerId1,
-        slot: 'top',
-        sourceId: sourceId,
-        sourceLayer: 'flooded',
-        filter: ['==', ['get', 'risk_level'], 1],
-        fillColor: Colors.lightBlue.withValues(alpha: 0.6).toARGB32(),
-      ),
-    );
+    final basePosition = await _overlayBaseLayerPosition();
 
-    await mapboxMap.style.addLayer(
+    final realtimeFill1 = FillLayer(
+      id: fillLayerId1,
+      sourceId: sourceId,
+      sourceLayer: 'flooded',
+      filter: [
+        '==',
+        ['get', 'risk_level'],
+        1,
+      ],
+      fillColor: Colors.lightBlue.withValues(alpha: 0.6).toARGB32(),
+    );
+    if (basePosition != null) {
+      await mapboxMap.style.addLayerAt(realtimeFill1, basePosition);
+    } else {
+      await mapboxMap.style.addLayer(realtimeFill1);
+    }
+
+    await mapboxMap.style.addLayerAt(
       FillLayer(
         id: fillLayerId2,
-        slot: 'top',
         sourceId: sourceId,
         sourceLayer: 'flooded',
-        filter: ['==', ['get', 'risk_level'], 2],
+        filter: [
+          '==',
+          ['get', 'risk_level'],
+          2,
+        ],
         fillColor: Colors.blue.withValues(alpha: 0.6).toARGB32(),
       ),
+      LayerPosition(above: fillLayerId1),
     );
 
-    await mapboxMap.style.addLayer(
+    await mapboxMap.style.addLayerAt(
       FillLayer(
         id: fillLayerId3,
-        slot: 'top',
         sourceId: sourceId,
         sourceLayer: 'flooded',
-        filter: ['==', ['get', 'risk_level'], 3],
+        filter: [
+          '==',
+          ['get', 'risk_level'],
+          3,
+        ],
         fillColor: Colors.blue.withValues(alpha: 0.9).toARGB32(),
       ),
+      LayerPosition(above: fillLayerId2),
     );
 
-    await mapboxMap.style.addLayer(
+    await mapboxMap.style.addLayerAt(
       LineLayer(
         id: outlineLayerId,
-        slot: 'top',
         sourceId: sourceId,
         sourceLayer: 'flooded',
         lineColor: Colors.cyan.withValues(alpha: 0.9).toARGB32(),
         lineWidth: 1.0,
       ),
+      LayerPosition(above: fillLayerId3),
     );
   }
 

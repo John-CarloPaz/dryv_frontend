@@ -33,7 +33,7 @@ class _SearchScreenState extends State<SearchScreen> {
       "&session_token=$_sessionToken"
       "&country=ph"
       "&access_token=$accessToken"
-      "&limit=5"
+      "&limit=5",
     );
 
     final response = await http.get(url);
@@ -60,8 +60,13 @@ class _SearchScreenState extends State<SearchScreen> {
       final data = json.decode(response.body);
       final feature = data["features"]?[0];
       if (feature != null) {
-        final name = feature["properties"]?["name"] ?? feature["name"] ?? "Unknown";
-        final address = feature["properties"]?["place_formatted"] ?? feature["properties"]?['address'] ?? feature["place_formatted"] ?? "";
+        final name =
+            feature["properties"]?["name"] ?? feature["name"] ?? "Unknown";
+        final address =
+            feature["properties"]?["place_formatted"] ??
+            feature["properties"]?['address'] ??
+            feature["place_formatted"] ??
+            "";
         if (!mounted) return;
         Navigator.pop(context, {
           "name": name,

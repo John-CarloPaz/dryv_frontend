@@ -1,74 +1,99 @@
 import 'package:flutter/material.dart';
+import 'package:lottie/lottie.dart';
 
-/// Full-screen loading overlay.
+/// Route-level loading overlay.
 ///
-/// UX requirement: animated full-screen UI with text "Calculating for Safest Route".
-class SafestRouteLoadingOverlay extends StatefulWidget {
+/// Intended to be pushed as a non-opaque route so the underlying map remains
+/// visible. Displays a Lottie animation with text "Calculating Safest Route".
+class SafestRouteLoadingOverlay extends StatelessWidget {
   final String message;
+
+  /// Lottie JSON asset to render.
+  final String lottieAssetPath;
 
   const SafestRouteLoadingOverlay({
     super.key,
-    this.message = 'Calculating for Safest Route',
+    this.message = 'Calculating Safest Route',
+    this.lottieAssetPath = 'lib/assets/images/Compass.json',
   });
-
-  @override
-  State<SafestRouteLoadingOverlay> createState() =>
-      _SafestRouteLoadingOverlayState();
-}
-
-class _SafestRouteLoadingOverlayState extends State<SafestRouteLoadingOverlay>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1200),
-  )..repeat(reverse: true);
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
 
-    return Scaffold(
-      backgroundColor: scheme.surface,
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AnimatedBuilder(
-                  animation: _controller,
-                  builder: (context, _) {
-                    final t = _controller.value;
-                    final scale = 0.92 + (t * 0.08);
-                    return Transform.scale(
-                      scale: scale,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 5,
-                        color: scheme.primary,
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          ModalBarrier(
+            dismissible: false,
+            color: scheme.surface.withValues(alpha: 0.62),
+          ),
+          SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: 420,
+                    minWidth: 260,
+                  ),
+                  child: Material(
+                    color: scheme.surface,
+                    borderRadius: BorderRadius.circular(20),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 22,
+                        vertical: 18,
                       ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  widget.message,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w600,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final size = constraints.maxWidth.clamp(220, 420);
+                          final lottieSize = (size * 0.38).clamp(96, 168);
+
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: lottieSize.toDouble(),
+                                height: lottieSize.toDouble(),
+                                child: Lottie.asset(
+                                  lottieAssetPath,
+                                  fit: BoxFit.contain,
+                                  frameRate: FrameRate.max,
+                                  repeat: true,
+                                  animate: true,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Center(
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 4,
+                                        color: scheme.primary,
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                message,
+                                textAlign: TextAlign.center,
+                                style: textTheme.titleMedium?.copyWith(
+                                  color: scheme.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
+                    ),
+                  ),
                 ),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

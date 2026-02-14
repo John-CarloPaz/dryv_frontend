@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
+import 'package:dryvmobapp/Services/route_line_overlay_service.dart';
+
 /// Service responsible for handling Mapbox-related behavior such as
 /// initialization, realtime flood overlays, and style re-application.
 class MapService {
@@ -20,6 +22,9 @@ class MapService {
   static const _realtimeFloodSourceId = 'realtime-flood-source';
   static const _realtimeFloodLayerId = 'realtime-flood-layer';
   static const _realtimeFloodOutlineLayerId = 'realtime-flood-outline';
+
+  bool _realtimeFloodEnabled = false;
+  LayerPosition? _realtimeFloodLayerPosition;
 
   /// Fake API endpoint that returns GeoJSON for flooded polygons.
   static const String _realtimeFloodUrl =
@@ -39,13 +44,14 @@ class MapService {
 
   /// Creates the internal reference to [MapboxMap] and performs any
   /// one-time configuration (such as disabling the scale bar).
-  Future<void> attachMap(MapboxMap mapboxMap,
-      {Duration pollInterval = const Duration(seconds: 2)}) async {
+  Future<void> attachMap(
+    MapboxMap mapboxMap, {
+    Duration pollInterval = const Duration(seconds: 2),
+  }) async {
     _mapboxMap = mapboxMap;
     floodPollInterval = pollInterval;
 
-    await _mapboxMap.scaleBar
-      .updateSettings(ScaleBarSettings(enabled: false));
+    await _mapboxMap.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
 
     _initialized = true;
   }
@@ -55,15 +61,65 @@ class MapService {
   void startRealtimeFloodUpdates() {
     if (!_initialized) return;
 
+    _realtimeFloodEnabled = true;
+
     _floodTimer?.cancel();
     _fetchAndApplyRealtimeFloodData();
-    _floodTimer =
-        Timer.periodic(floodPollInterval, (_) => _fetchAndApplyRealtimeFloodData());
+    _floodTimer = Timer.periodic(
+      floodPollInterval,
+      (_) => _fetchAndApplyRealtimeFloodData(),
+    );
   }
 
   /// Stops realtime flood polling. Call from the widget's dispose.
   void stopRealtimeFloodUpdates() {
+    _realtimeFloodEnabled = false;
     _floodTimer?.cancel();
+  }
+
+  /// Enables/disables realtime flood overlay and removes it when disabled.
+  Future<void> setRealtimeFloodEnabled(
+    bool enabled, {
+    LayerPosition? layerPosition,
+  }) async {
+    if (!_initialized) return;
+
+    _realtimeFloodLayerPosition = layerPosition;
+
+    if (enabled) {
+      startRealtimeFloodUpdates();
+      return;
+    }
+
+    stopRealtimeFloodUpdates();
+    await removeRealtimeFloodLayer();
+  }
+
+  Future<void> removeRealtimeFloodLayer() async {
+    if (!_initialized) return;
+
+    final style = _mapboxMap.style;
+
+    const layerIds = <String>[
+      _realtimeFloodLayerId,
+      _realtimeFloodOutlineLayerId,
+    ];
+
+    for (final id in layerIds) {
+      final exists = await style.styleLayerExists(id);
+      if (exists) {
+        try {
+          await style.removeStyleLayer(id);
+        } catch (_) {}
+      }
+    }
+
+    final sourceExists = await style.styleSourceExists(_realtimeFloodSourceId);
+    if (sourceExists) {
+      try {
+        await style.removeStyleSource(_realtimeFloodSourceId);
+      } catch (_) {}
+    }
   }
 
   /// Re-applies the realtime flood overlay. Intended to be called when the
@@ -81,6 +137,7 @@ class MapService {
   /// Internal: fetches flood data from the API and updates the map overlay.
   Future<void> _fetchAndApplyRealtimeFloodData() async {
     if (!_initialized) return;
+    if (!_realtimeFloodEnabled) return;
 
     debugPrint('${DateTime.now()} Fetching realtime flood data...');
 
@@ -119,61 +176,87 @@ class MapService {
     try {
       final style = _mapboxMap.style;
 
-      // Remove any existing layers that depend on the source first.
-      const layerIds = <String>[
-        _realtimeFloodLayerId,
-        _realtimeFloodOutlineLayerId,
-      ];
-
-      for (final id in layerIds) {
-        final exists = await style.styleLayerExists(id);
-        if (exists) {
-          try {
-            await style.removeStyleLayer(id);
-          } catch (e) {
-            debugPrint('Failed to remove layer $id: $e');
+      // Prefer inserting below the route line layers so the route stays visible.
+      LayerPosition? layerPosition = _realtimeFloodLayerPosition;
+      if (layerPosition == null) {
+        try {
+          final hasRouteLayer = await style.styleLayerExists(
+            RouteLineOverlayService.completedLayerId,
+          );
+          if (hasRouteLayer) {
+            layerPosition = LayerPosition(
+              below: RouteLineOverlayService.completedLayerId,
+            );
           }
+        } catch (_) {
+          layerPosition = null;
         }
       }
 
+      // Update existing source data in-place when possible (less flicker).
       final sourceExists = await style.styleSourceExists(_realtimeFloodSourceId);
       if (sourceExists) {
         try {
-          await style.removeStyleSource(_realtimeFloodSourceId);
-        } catch (e) {
-          debugPrint('Failed to remove source $_realtimeFloodSourceId: $e');
+          await style.setStyleSourceProperty(
+            _realtimeFloodSourceId,
+            'data',
+            geojson,
+          );
+        } catch (_) {
+          // Fall back to recreate.
+          try {
+            await style.removeStyleSource(_realtimeFloodSourceId);
+          } catch (_) {}
+          await style.addSource(
+            GeoJsonSource(id: _realtimeFloodSourceId, data: geojson),
+          );
         }
+      } else {
+        await style.addSource(
+          GeoJsonSource(id: _realtimeFloodSourceId, data: geojson),
+        );
       }
 
-      // Add fresh source
-      await style.addSource(
-        GeoJsonSource(
-          id: _realtimeFloodSourceId,
-          data: geojson,
-        ),
+      // Ensure layers exist.
+      final fillExists = await style.styleLayerExists(_realtimeFloodLayerId);
+      final outlineExists = await style.styleLayerExists(
+        _realtimeFloodOutlineLayerId,
       );
 
-      // Add fill layer for realtime flooded polygons
-      await style.addLayer(
-        FillLayer(
+      if (fillExists) {
+        // Leave as-is.
+      } else {
+        final layer = FillLayer(
           id: _realtimeFloodLayerId,
           sourceId: _realtimeFloodSourceId,
           fillColor: Colors.cyan.withValues(alpha: 0.35).toARGB32(),
-        ),
-      );
+        );
+        if (layerPosition != null) {
+          await style.addLayerAt(layer, layerPosition);
+        } else {
+          await style.addLayer(layer);
+        }
+      }
 
-      // Add outline layer for clarity
-      await style.addLayer(
-        LineLayer(
+      if (outlineExists) {
+        // Leave as-is.
+      } else {
+        final layer = LineLayer(
           id: _realtimeFloodOutlineLayerId,
           sourceId: _realtimeFloodSourceId,
           lineColor: Colors.cyan.withValues(alpha: 0.9).toARGB32(),
           lineWidth: 1.0,
-        ),
-      );
+        );
+        if (layerPosition != null) {
+          await style.addLayerAt(layer, layerPosition);
+        } else {
+          await style.addLayer(layer);
+        }
+      }
 
       debugPrint(
-          'Realtime flood layer applied successfully at ${DateTime.now()}');
+        'Realtime flood layer applied successfully at ${DateTime.now()}',
+      );
     } catch (e, st) {
       debugPrint('Failed to apply realtime flood data to map: $e\n$st');
     }

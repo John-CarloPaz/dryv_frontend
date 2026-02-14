@@ -1,34 +1,29 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// Centralized helper for requesting location permission.
+/// Centralized helper for requesting location permission and reading an origin
+/// coordinate for the backend.
 ///
-/// IMPORTANT: We do not fetch coordinates here (no geolocator). Mapbox's
-/// LocationComponent + Viewport follow-puck behavior is responsible for
-/// consuming device location.
+/// SAFETY:
+/// - Used only to determine origin sent to the backend.
+/// - We do not compute or alter routes on-device.
 class LocationService {
-  static const MethodChannel _platformChannel = MethodChannel('dryv/platform');
-
-  /// Returns the device last-known location from the host platform.
-  ///
-  /// SAFETY:
-  /// - Used only to determine origin sent to the backend.
-  /// - We do not compute or alter routes on-device.
   static Future<Map<String, double>?> getLastKnownLocation() async {
-    if (!Platform.isAndroid) return null;
     try {
-      final result = await _platformChannel
-          .invokeMapMethod<String, dynamic>('getLastKnownLocation');
-      if (result == null) return null;
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return {'lat': last.latitude, 'lng': last.longitude};
+      }
 
-      final lat = result['lat'];
-      final lng = result['lng'];
-      if (lat is! num || lng is! num) return null;
-
-      return {'lat': lat.toDouble(), 'lng': lng.toDouble()};
+      final current = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      return {'lat': current.latitude, 'lng': current.longitude};
     } catch (_) {
       return null;
     }
@@ -36,8 +31,7 @@ class LocationService {
 
   static Future<bool> isLocationServicesEnabled() async {
     try {
-      final serviceStatus = await Permission.location.serviceStatus;
-      return serviceStatus == ServiceStatus.enabled;
+      return await Geolocator.isLocationServiceEnabled();
     } catch (_) {
       // If service status isn't available for some reason, don't block the user.
       return true;
@@ -53,26 +47,19 @@ class LocationService {
   }
 
   static Future<bool> openSystemLocationSettings() async {
-    if (Platform.isAndroid) {
-      try {
-        await _platformChannel.invokeMethod('openLocationSettings');
-        return true;
-      } catch (_) {
-        // Fallback to app settings if platform channel fails.
-        return openAppSettings();
-      }
+    try {
+      return await Geolocator.openLocationSettings();
+    } catch (_) {
+      return openAppSettings();
     }
-
-    // iOS can't deep-link directly to the system Location Services toggle.
-    // App settings is the closest safe destination.
-    return openAppSettings();
   }
 
-  static Future<bool> ensureLocationServicesEnabled(BuildContext context) async {
-    // permission_handler exposes whether the platform location service (GPS) is enabled.
-    // If it's off, Mapbox won't be able to produce location updates.
+  static Future<bool> ensureLocationServicesEnabled(
+    BuildContext context,
+  ) async {
     final enabled = await isLocationServicesEnabled();
     if (enabled) return true;
+    if (!context.mounted) return false;
 
     final openSettingsChoice = await showDialog<bool>(
       context: context,
@@ -111,6 +98,8 @@ class LocationService {
 
     status = await permission.request();
     if (status.isGranted) return true;
+
+    if (!context.mounted) return false;
 
     if (status.isPermanentlyDenied) {
       final openSettings = await showDialog<bool>(

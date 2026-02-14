@@ -1,9 +1,10 @@
 import 'package:dryvmobapp/Screens/Search/search_screen.dart';
 import 'package:dryvmobapp/Services/backend_routing_service.dart';
 import 'package:dryvmobapp/Services/location_service.dart';
-import 'package:dryvmobapp/Services/mapbox_navigation_channel.dart';
 import 'package:dryvmobapp/Services/app_file_logger.dart';
-import 'dart:convert';
+import 'package:dryvmobapp/Models/lat_lng.dart';
+import 'package:dryvmobapp/Screens/Navigation/route_preview_screen.dart';
+import 'package:dryvmobapp/Services/bottom_nav_visibility.dart';
 import 'package:dryvmobapp/Widgets/grouped_buttons.dart';
 import 'package:dryvmobapp/Widgets/location_details.dart';
 import 'package:dryvmobapp/Widgets/search_bar.dart';
@@ -25,6 +26,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   PointAnnotationManager? annotationManager;
   final List<PointAnnotation> addedAnnotations = [];
   final TextEditingController _searchController = TextEditingController();
+
+  PersistentBottomSheetController? _locationSheetController;
+
+  _SelectedPlace? _selectedPlace;
 
   final double defaultLng = 120.592083;
   final double defaultLat = 15.158430;
@@ -102,6 +107,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final servicesEnabled = await LocationService.ensureLocationServicesEnabled(
       context,
     );
+    if (!mounted) return;
     if (!servicesEnabled) {
       // User may have been sent to settings; auto-retry once on resume.
       _pendingLocationAutoRetry = true;
@@ -111,6 +117,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     // First tap: ask for permission, then enable Mapbox location.
     if (!_userLocationEnabled) {
       final granted = await LocationService.ensureLocationPermission(context);
+      if (!mounted) return;
       if (!granted) {
         // If permission was denied permanently, user likely went to settings.
         _pendingLocationAutoRetry = true;
@@ -180,6 +187,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       final double lng = result['lng'];
       final double lat = result['lat'];
       final String name = result['name'];
+      final String address = (result['address'] ?? '').toString();
+
+      _selectedPlace = _SelectedPlace(
+        lat: lat,
+        lng: lng,
+        name: name,
+        address: address,
+      );
 
       // Update the search bar's controller so the chosen location is displayed
       _searchController.text = name;
@@ -210,26 +225,44 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       addedAnnotations.add(newAnnotation);
 
       if (!mounted) return;
-      PersistentBottomSheetController? sheetController;
-      sheetController = Scaffold.of(context).showBottomSheet((ctx) {
+      _showSelectedPlaceDetails();
+    }
+  }
+
+  void _showSelectedPlaceDetails() {
+    final selected = _selectedPlace;
+    if (!mounted || selected == null) return;
+
+    _locationSheetController?.close();
+
+    final releaseBottomNav = BottomNavVisibility.acquireHide();
+    _locationSheetController = Scaffold.of(context).showBottomSheet(
+      (ctx) {
         return LocationDetailsSheet(
-          name: name,
-          address: result['address'] ?? '',
-          onNavigate: () {
-            sheetController?.close();
-            _requestAndPreviewBackendRoute(
-              destination: LatLng(lat: lat, lng: lng),
-              destinationName: name,
+          name: selected.name,
+          address: selected.address,
+          destination: LatLng(lat: selected.lat, lng: selected.lng),
+          onNavigate: () async {
+            _locationSheetController?.close();
+            _locationSheetController = null;
+
+            await _requestAndPreviewBackendRoute(
+              destination: LatLng(lat: selected.lat, lng: selected.lng),
+              destinationName: selected.name,
             );
+
+            if (!mounted) return;
+            _showSelectedPlaceDetails();
           },
           onSave: () {
             // Implement save/bookmark behavior
-            sheetController?.close();
+            _locationSheetController?.close();
           },
           onClose: () {
             // When the user closes the sheet, remove the annotation and clear
             // the search field
-            sheetController?.close();
+            _selectedPlace = null;
+            _locationSheetController?.close();
             for (var annotation in addedAnnotations) {
               annotationManager?.delete(annotation);
             }
@@ -237,8 +270,22 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             _searchController.clear();
           },
         );
-      });
-    }
+      },
+      backgroundColor: Colors.white,
+      elevation: 12,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      enableDrag: false,
+    );
+
+    _locationSheetController?.closed.whenComplete(() {
+      releaseBottomNav();
+      if (mounted) {
+        _locationSheetController = null;
+      }
+    });
   }
 
   Future<void> _requestAndPreviewBackendRoute({
@@ -248,15 +295,21 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     // Require location services + permission (origin must be correct for safety).
-    final servicesEnabled = await LocationService.ensureLocationServicesEnabled(context);
+    final servicesEnabled = await LocationService.ensureLocationServicesEnabled(
+      context,
+    );
+    if (!mounted) return;
     if (!servicesEnabled) return;
-    final permissionGranted = await LocationService.ensureLocationPermission(context);
+    final permissionGranted = await LocationService.ensureLocationPermission(
+      context,
+    );
+    if (!mounted) return;
     if (!permissionGranted) return;
 
     // 1) Obtain an origin (current device location) to send to backend.
     final originMap = await LocationService.getLastKnownLocation();
+    if (!mounted) return;
     if (originMap == null) {
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -275,7 +328,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         ? null
         : '${baseUrl.replaceAll(RegExp(r"/+$"), "")}/route/safe';
 
-    final endpoint = (dotenv.env['DRYV_SAFEST_ROUTE_URL']?.trim().isNotEmpty == true)
+    final endpoint =
+        (dotenv.env['DRYV_SAFEST_ROUTE_URL']?.trim().isNotEmpty == true)
         ? dotenv.env['DRYV_SAFEST_ROUTE_URL']
         : fallbackEndpoint;
 
@@ -283,7 +337,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Backend route URL not configured. Set API_BASE_URL or DRYV_SAFEST_ROUTE_URL in .env'),
+          content: Text(
+            'Backend route URL not configured. Set API_BASE_URL or DRYV_SAFEST_ROUTE_URL in .env',
+          ),
         ),
       );
       return;
@@ -293,14 +349,27 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       safestRouteEndpoint: Uri.parse(endpoint),
     );
 
-    AppFileLogger.instance.info('Navigate tapped: using backend endpoint=$endpoint');
+    AppFileLogger.instance.info(
+      'Navigate tapped: using backend endpoint=$endpoint',
+    );
 
     // 3) Show full-screen loading UI while waiting for backend response.
     // We push the overlay route *without awaiting* and then run the request.
     Navigator.of(context).push(
       PageRouteBuilder(
-        opaque: true,
+        opaque: false,
+        barrierDismissible: false,
+        barrierColor: Colors.transparent,
         pageBuilder: (_, __, ___) => const SafestRouteLoadingOverlay(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            ),
+            child: child,
+          );
+        },
       ),
     );
 
@@ -327,14 +396,19 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }) async {
     late final BackendApprovedRoute approved;
     try {
-      approved = await service.fetchSafestRoute(origin: origin, destination: destination);
+      approved = await service.fetchSafestRoute(
+        origin: origin,
+        destination: destination,
+      );
     } on BackendRoutingException catch (e) {
-      AppFileLogger.instance.warn('Safest route backend exception: ${e.code} ${e.message}');
+      AppFileLogger.instance.warn(
+        'Safest route backend exception: ${e.code} ${e.message}',
+      );
       if (!mounted) return;
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
       return;
     } catch (e) {
       AppFileLogger.instance.error('Safest route unexpected error', err: e);
@@ -349,72 +423,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     Navigator.of(context).pop();
 
-    // 4) Push backend-approved coordinates to Android via MethodChannel.
-    // Prefer the backend geometry linepoints (if provided) so preview matches backend path.
-    // Fallback: use backend waypoints.
-    final coords = _tryExtractLineStringCoordinates(approved.geometryGeoJson) ?? approved.waypoints;
-    final waypointIndices = <int>[0, coords.length - 1];
-
-    AppFileLogger.instance.info(
-      'Sending backend coordinates to Android for preview: coords=${coords.length} (fromGeometry=${coords != approved.waypoints})',
-    );
-
-    await MapboxNavigationChannel.setApprovedRoute(
-      coordinates: coords,
-      waypointIndices: waypointIndices,
-      originLabel: 'Your location',
-      destinationLabel: destinationName,
-      distanceMeters: approved.distanceMeters,
-      durationSeconds: approved.durationSeconds,
-      maxRiskLevel: approved.maxRiskLevel,
-    );
-
-    AppFileLogger.instance.info('Approved waypoints sent to Android; opening native preview');
-
+    // 4) Open Flutter-native route preview + driving flow.
+    AppFileLogger.instance.info('Opening Flutter RoutePreviewScreen');
     if (!mounted) return;
-    try {
-      await MapboxNavigationChannel.startNavigation();
-    } on PlatformException catch (e) {
-      AppFileLogger.instance.warn(
-        'Native navigation PlatformException: ${e.code} ${e.message ?? ''}',
-      );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? e.code)),
-      );
-    }
-  }
-
-  List<LatLng>? _tryExtractLineStringCoordinates(dynamic geometryGeoJson) {
-    try {
-      dynamic obj = geometryGeoJson;
-      if (obj is String) {
-        obj = jsonDecode(obj);
-      }
-
-      if (obj is Map) {
-        dynamic geom = obj;
-        if (obj['type'] == 'Feature' && obj['geometry'] is Map) {
-          geom = obj['geometry'];
-        }
-        if (geom is Map && geom['type'] == 'LineString' && geom['coordinates'] is List) {
-          final coords = geom['coordinates'] as List;
-          final out = <LatLng>[];
-          for (final c in coords) {
-            if (c is List && c.length >= 2) {
-              final lng = c[0];
-              final lat = c[1];
-              if (lng is num && lat is num) {
-                out.add(LatLng(lat: lat.toDouble(), lng: lng.toDouble()));
-              }
-            }
-          }
-          return out.length >= 2 ? out : null;
-        }
-      }
-    } catch (_) {
-      // Best-effort only.
-    }
-    return null;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RoutePreviewScreen(
+          approved: approved,
+          originLabel: 'Your location',
+          destinationLabel: destinationName,
+        ),
+      ),
+    );
   }
 
   @override
@@ -423,4 +443,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _searchController.dispose();
     super.dispose();
   }
+}
+
+class _SelectedPlace {
+  final double lat;
+  final double lng;
+  final String name;
+  final String address;
+
+  const _SelectedPlace({
+    required this.lat,
+    required this.lng,
+    required this.name,
+    required this.address,
+  });
 }
