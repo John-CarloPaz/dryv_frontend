@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^3.0.3
   http: ^1.2.1
+  shared_preferences: ^2.2.3
+  flutter_svg: ^2.0.10+1
   mapbox_maps_flutter: ^2.0.0
   permission_handler: ^11.4.0
   flutter_native_splash: ^2.4.7
@@ -68,7 +70,11 @@ flutter:
   assets:
     - lib/assets/images/splash-logo.png
     - lib/assets/images/logo.png
+    - lib/assets/images/header-icon.svg
     - lib/assets/images/pin.png
+    - lib/assets/images/intro1.png
+    - lib/assets/images/intro2.png
+    - lib/assets/images/intro3.png
     - lib/assets/images/Compass.json
     - .env
   

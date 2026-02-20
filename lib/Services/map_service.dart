@@ -1,7 +1,4 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'package:dryvmobapp/Services/route_line_overlay_service.dart';
@@ -14,33 +11,24 @@ class MapService {
   late final MapboxMap _mapboxMap;
   bool _initialized = false;
 
-  Timer? _floodTimer;
-  Duration floodPollInterval = const Duration(seconds: 2);
-  String? _lastFloodGeoJson;
-  DateTime? _lastFloodUpdated;
-
   static const _realtimeFloodSourceId = 'realtime-flood-source';
-  static const _realtimeFloodLayerId = 'realtime-flood-layer';
-  static const _realtimeFloodOutlineLayerId = 'realtime-flood-outline';
+  static const _realtimeFloodFillLayerId1 = 'realtime-flood-layer-1';
+  static const _realtimeFloodFillLayerId2 = 'realtime-flood-layer-2';
+  static const _realtimeFloodFillLayerId3 = 'realtime-flood-layer-3';
+
+  // Hosted vector tileset for realtime flood overlay.
+  static const String _realtimeFloodTilesetUrl =
+      'mapbox://johncarlo123.dryv_tileset_1';
+
+  // The source layer inside the vector tileset.
+  static const String _realtimeFloodSourceLayer = 'flooded';
 
   bool _realtimeFloodEnabled = false;
   LayerPosition? _realtimeFloodLayerPosition;
 
-  /// Fake API endpoint that returns GeoJSON for flooded polygons.
-  static const String _realtimeFloodUrl =
-      'https://raw.githubusercontent.com/John-CarloPaz/fake-apis/main/flooded-polygons.json';
-
-  /// Optional callbacks to let the UI react to flood updates.
-  final ValueNotifier<DateTime?> floodLastUpdatedNotifier =
-      ValueNotifier<DateTime?>(null);
-
   MapboxMap get mapboxMap => _mapboxMap;
 
   bool get isInitialized => _initialized;
-
-  String? get lastFloodGeoJson => _lastFloodGeoJson;
-
-  DateTime? get lastFloodUpdated => _lastFloodUpdated;
 
   /// Creates the internal reference to [MapboxMap] and performs any
   /// one-time configuration (such as disabling the scale bar).
@@ -49,32 +37,13 @@ class MapService {
     Duration pollInterval = const Duration(seconds: 2),
   }) async {
     _mapboxMap = mapboxMap;
-    floodPollInterval = pollInterval;
+
+    // pollInterval kept for backward compatibility, but the realtime flood
+    // overlay is now backed by a hosted tileset (no polling needed).
 
     await _mapboxMap.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
 
     _initialized = true;
-  }
-
-  /// Starts periodic polling of the realtime flood API and applying the
-  /// resulting GeoJSON to the map.
-  void startRealtimeFloodUpdates() {
-    if (!_initialized) return;
-
-    _realtimeFloodEnabled = true;
-
-    _floodTimer?.cancel();
-    _fetchAndApplyRealtimeFloodData();
-    _floodTimer = Timer.periodic(
-      floodPollInterval,
-      (_) => _fetchAndApplyRealtimeFloodData(),
-    );
-  }
-
-  /// Stops realtime flood polling. Call from the widget's dispose.
-  void stopRealtimeFloodUpdates() {
-    _realtimeFloodEnabled = false;
-    _floodTimer?.cancel();
   }
 
   /// Enables/disables realtime flood overlay and removes it when disabled.
@@ -87,11 +56,12 @@ class MapService {
     _realtimeFloodLayerPosition = layerPosition;
 
     if (enabled) {
-      startRealtimeFloodUpdates();
+      _realtimeFloodEnabled = true;
+      await _addRealtimeFloodTilesetLayer();
       return;
     }
 
-    stopRealtimeFloodUpdates();
+    _realtimeFloodEnabled = false;
     await removeRealtimeFloodLayer();
   }
 
@@ -101,8 +71,9 @@ class MapService {
     final style = _mapboxMap.style;
 
     const layerIds = <String>[
-      _realtimeFloodLayerId,
-      _realtimeFloodOutlineLayerId,
+      _realtimeFloodFillLayerId1,
+      _realtimeFloodFillLayerId2,
+      _realtimeFloodFillLayerId3,
     ];
 
     for (final id in layerIds) {
@@ -127,143 +98,91 @@ class MapService {
   Future<void> reapplyRealtimeFloodLayer() async {
     if (!_initialized) return;
 
-    if (_lastFloodGeoJson != null) {
-      await _applyFloodDataToMap(_lastFloodGeoJson!);
-    } else {
-      await _fetchAndApplyRealtimeFloodData();
-    }
-  }
-
-  /// Internal: fetches flood data from the API and updates the map overlay.
-  Future<void> _fetchAndApplyRealtimeFloodData() async {
-    if (!_initialized) return;
     if (!_realtimeFloodEnabled) return;
-
-    debugPrint('${DateTime.now()} Fetching realtime flood data...');
-
-    try {
-      final fetchUrl =
-          '$_realtimeFloodUrl?_ts=${DateTime.now().millisecondsSinceEpoch}';
-      final resp = await http.get(Uri.parse(fetchUrl));
-
-      if (resp.statusCode != 200) {
-        debugPrint('Realtime flood API returned ${resp.statusCode}');
-        return;
-      }
-
-      final geojson = resp.body;
-
-      // Avoid unnecessary updates when payload didn't change
-      if (_lastFloodGeoJson != null && _lastFloodGeoJson == geojson) return;
-
-      await _applyFloodDataToMap(geojson);
-
-      _lastFloodGeoJson = geojson;
-      _lastFloodUpdated = DateTime.now();
-      floodLastUpdatedNotifier.value = _lastFloodUpdated;
-
-      debugPrint('Realtime flood source updated at $_lastFloodUpdated');
-    } catch (e, st) {
-      debugPrint('Failed to load realtime flood data: $e\n$st');
-    }
+    await _addRealtimeFloodTilesetLayer();
   }
 
-  /// Applies flood GeoJSON data to the map by creating/updating the source
-  /// and layers.
-  Future<void> _applyFloodDataToMap(String geojson) async {
-    if (!_initialized) return;
+  Future<LayerPosition?> _effectiveBaseLayerPosition(StyleManager style) async {
+    // Prefer inserting below the route line layers so the route stays visible.
+    LayerPosition? layerPosition = _realtimeFloodLayerPosition;
+    if (layerPosition != null) return layerPosition;
 
     try {
-      final style = _mapboxMap.style;
-
-      // Prefer inserting below the route line layers so the route stays visible.
-      LayerPosition? layerPosition = _realtimeFloodLayerPosition;
-      if (layerPosition == null) {
-        try {
-          final hasRouteLayer = await style.styleLayerExists(
-            RouteLineOverlayService.completedLayerId,
-          );
-          if (hasRouteLayer) {
-            layerPosition = LayerPosition(
-              below: RouteLineOverlayService.completedLayerId,
-            );
-          }
-        } catch (_) {
-          layerPosition = null;
-        }
-      }
-
-      // Update existing source data in-place when possible (less flicker).
-      final sourceExists = await style.styleSourceExists(_realtimeFloodSourceId);
-      if (sourceExists) {
-        try {
-          await style.setStyleSourceProperty(
-            _realtimeFloodSourceId,
-            'data',
-            geojson,
-          );
-        } catch (_) {
-          // Fall back to recreate.
-          try {
-            await style.removeStyleSource(_realtimeFloodSourceId);
-          } catch (_) {}
-          await style.addSource(
-            GeoJsonSource(id: _realtimeFloodSourceId, data: geojson),
-          );
-        }
-      } else {
-        await style.addSource(
-          GeoJsonSource(id: _realtimeFloodSourceId, data: geojson),
-        );
-      }
-
-      // Ensure layers exist.
-      final fillExists = await style.styleLayerExists(_realtimeFloodLayerId);
-      final outlineExists = await style.styleLayerExists(
-        _realtimeFloodOutlineLayerId,
+      final hasRouteLayer = await style.styleLayerExists(
+        RouteLineOverlayService.completedLayerId,
       );
-
-      if (fillExists) {
-        // Leave as-is.
-      } else {
-        final layer = FillLayer(
-          id: _realtimeFloodLayerId,
-          sourceId: _realtimeFloodSourceId,
-          fillColor: Colors.cyan.withValues(alpha: 0.35).toARGB32(),
-        );
-        if (layerPosition != null) {
-          await style.addLayerAt(layer, layerPosition);
-        } else {
-          await style.addLayer(layer);
-        }
+      if (hasRouteLayer) {
+        return LayerPosition(below: RouteLineOverlayService.completedLayerId);
       }
+    } catch (_) {}
 
-      if (outlineExists) {
-        // Leave as-is.
-      } else {
-        final layer = LineLayer(
-          id: _realtimeFloodOutlineLayerId,
-          sourceId: _realtimeFloodSourceId,
-          lineColor: Colors.cyan.withValues(alpha: 0.9).toARGB32(),
-          lineWidth: 1.0,
-        );
-        if (layerPosition != null) {
-          await style.addLayerAt(layer, layerPosition);
-        } else {
-          await style.addLayer(layer);
-        }
-      }
+    return null;
+  }
 
-      debugPrint(
-        'Realtime flood layer applied successfully at ${DateTime.now()}',
-      );
-    } catch (e, st) {
-      debugPrint('Failed to apply realtime flood data to map: $e\n$st');
+  Future<void> _addRealtimeFloodTilesetLayer() async {
+    if (!_initialized) return;
+
+    final style = _mapboxMap.style;
+
+    // Ensure a clean slate.
+    await removeRealtimeFloodLayer();
+
+    await style.addSource(
+      VectorSource(id: _realtimeFloodSourceId, url: _realtimeFloodTilesetUrl),
+    );
+
+    final basePosition = await _effectiveBaseLayerPosition(style);
+
+    final fill1 = FillLayer(
+      id: _realtimeFloodFillLayerId1,
+      sourceId: _realtimeFloodSourceId,
+      sourceLayer: _realtimeFloodSourceLayer,
+      filter: [
+        '==',
+        ['get', 'risk_level'],
+        1,
+      ],
+      fillColor: Colors.yellow.withValues(alpha: 0.6).toARGB32(),
+    );
+
+    if (basePosition != null) {
+      await style.addLayerAt(fill1, basePosition);
+    } else {
+      await style.addLayer(fill1);
     }
+
+    await style.addLayerAt(
+      FillLayer(
+        id: _realtimeFloodFillLayerId2,
+        sourceId: _realtimeFloodSourceId,
+        sourceLayer: _realtimeFloodSourceLayer,
+        filter: [
+          '==',
+          ['get', 'risk_level'],
+          2,
+        ],
+        fillColor: Colors.orange.withValues(alpha: 0.6).toARGB32(),
+      ),
+      LayerPosition(above: _realtimeFloodFillLayerId1),
+    );
+
+    await style.addLayerAt(
+      FillLayer(
+        id: _realtimeFloodFillLayerId3,
+        sourceId: _realtimeFloodSourceId,
+        sourceLayer: _realtimeFloodSourceLayer,
+        filter: [
+          '==',
+          ['get', 'risk_level'],
+          3,
+        ],
+        fillColor: Colors.red.withValues(alpha: 0.6).toARGB32(),
+      ),
+      LayerPosition(above: _realtimeFloodFillLayerId2),
+    );
   }
 
   void dispose() {
-    stopRealtimeFloodUpdates();
-    floodLastUpdatedNotifier.dispose();
+    _realtimeFloodEnabled = false;
   }
 }

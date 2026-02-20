@@ -1,8 +1,11 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-import '../../Providers/auth_provider.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+
+import 'package:dryvmobapp/Providers/auth_provider.dart';
+import 'package:dryvmobapp/Services/auth_service.dart';
+import 'package:dryvmobapp/Screens/Authentication/forgot_password_page.dart';
+import 'package:dryvmobapp/theme/app_colors.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -12,7 +15,7 @@ class LoginPage extends ConsumerStatefulWidget {
 
 class _LoginPageState extends ConsumerState<LoginPage> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscure = true;
@@ -22,47 +25,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     setState(() => _loading = true);
 
-    final String username = _usernameController.text.trim();
-    final String password = _passwordController.text;
-
-    // TODO: replace with your real API endpoint
-    final Uri url = Uri.parse('https://example.com/api/login');
-
     try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+      final auth = await const AuthService().login(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
       );
+      await ref.read(authTokenProvider.notifier).setToken(auth.token);
 
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> body = jsonDecode(response.body);
-        // adjust key names according to your API (e.g. 'token', 'access_token')
-        final String? token = body['token'] ?? body['access_token'];
-
-        if (token != null && token.isNotEmpty) {
-          // Save token into Riverpod state (in-memory)
-          ref.read(authProvider.notifier).setToken(token);
-
-          // Navigate to home or replace with your route
-          if (!mounted) return;
-          Navigator.of(context).pushReplacementNamed('/home');
-          return;
-        } else {
-          _showError('Login succeeded but no token returned.');
-        }
-      } else {
-        // try to extract message from API error body
-        String message = 'Login failed: ${response.statusCode}';
-        try {
-          final Map<String, dynamic> err = jsonDecode(response.body);
-          if (err.containsKey('message')) message = err['message'];
-          if (err.containsKey('error')) message = err['error'];
-        } catch (_) {}
-        _showError(message);
-      }
+      if (!mounted) return;
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (r) => false);
     } catch (e) {
-      _showError('Network error: $e');
+      _showError(e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -77,73 +50,254 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   @override
   void dispose() {
-    _usernameController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  InputDecoration _decoration({
+    required String label,
+    required IconData icon,
+    Widget? suffix,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon, color: AppColors.darkBlue),
+      suffixIcon: suffix,
+      floatingLabelStyle: const TextStyle(color: AppColors.primary),
+      enabledBorder: UnderlineInputBorder(
+        borderSide: BorderSide(
+          color: AppColors.darkBlue.withValues(alpha: 0.45),
+        ),
+      ),
+      focusedBorder: const UnderlineInputBorder(
+        borderSide: BorderSide(color: AppColors.primary, width: 2),
+      ),
+    );
+  }
+
+  void _openTerms() {
+    Navigator.of(context).pushNamed('/terms');
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Login')),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              children: [
-                const FlutterLogo(size: 96),
-                const SizedBox(height: 24),
-                TextFormField(
-                  controller: _usernameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
-                    prefixIcon: Icon(Icons.person),
-                    border: OutlineInputBorder(),
-                  ),
-                  textInputAction: TextInputAction.next,
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Enter username' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _passwordController,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: const Icon(Icons.lock),
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscure ? Icons.visibility : Icons.visibility_off,
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 18),
+                    Center(
+                      child: SvgPicture.asset(
+                        'lib/assets/images/header-icon.svg',
+                        height: 92,
+                        fit: BoxFit.contain
                       ),
-                      onPressed: () => setState(() => _obscure = !_obscure),
                     ),
-                  ),
-                  obscureText: _obscure,
-                  textInputAction: TextInputAction.done,
-                  onFieldSubmitted: (_) => _login(),
-                  validator: (v) =>
-                      (v == null || v.isEmpty) ? 'Enter password' : null,
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _loading ? null : _login,
-                    child: _loading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                    const SizedBox(height: 22),
+                    const Text(
+                      'Account Login',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: _decoration(
+                        label: 'Email Address',
+                        icon: Icons.email_outlined,
+                      ),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) {
+                        final text = (v ?? '').trim();
+                        if (text.isEmpty) return 'Enter email address';
+                        if (!text.contains('@')) return 'Enter a valid email';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _passwordController,
+                      decoration: _decoration(
+                        label: 'Password',
+                        icon: Icons.lock_outline,
+                        suffix: IconButton(
+                          icon: Icon(
+                            _obscure ? Icons.visibility : Icons.visibility_off,
+                            color: AppColors.darkBlue,
+                          ),
+                          onPressed: () => setState(() => _obscure = !_obscure),
+                        ),
+                      ),
+                      obscureText: _obscure,
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) => _loading ? null : _login(),
+                      validator: (v) =>
+                          (v == null || v.isEmpty) ? 'Enter password' : null,
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _loading
+                            ? null
+                            : () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const ForgotPasswordPage(),
+                                  ),
+                                );
+                              },
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          minimumSize: const Size(0, 0),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        child: const Text(
+                          'Forgot password?',
+                          style: TextStyle(
+                            decoration: TextDecoration.underline,
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          'By logging in, you agree to the ',
+                          style: TextStyle(
+                            color: AppColors.darkBlue.withValues(alpha: 0.70),
+                            fontSize: 12,
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _openTerms,
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(0, 0),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'Terms and Conditions',
+                            style: TextStyle(
+                              decoration: TextDecoration.underline,
+                              fontSize: 12,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w700,
                             ),
-                          )
-                        : const Text('Login'),
-                  ),
+                          ),
+                        ),
+                        Text(
+                          ' and ',
+                          style: TextStyle(
+                            color: AppColors.darkBlue.withValues(alpha: 0.70),
+                            fontSize: 12,
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _openTerms,
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(0, 0),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'Privacy Policy',
+                            style: TextStyle(
+                              decoration: TextDecoration.underline,
+                              fontSize: 12,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '.',
+                          style: TextStyle(
+                            color: AppColors.darkBlue.withValues(alpha: 0.70),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    SizedBox(
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: _loading ? null : _login,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: _loading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text(
+                                'Login',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Don\'t have an account? ',
+                          style: TextStyle(
+                            color: AppColors.darkBlue.withValues(alpha: 0.70),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              Navigator.of(context).pushNamed('/auth/register'),
+                          child: const Text(
+                            'Sign up!',
+                            style: TextStyle(
+                              decoration: TextDecoration.underline,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),

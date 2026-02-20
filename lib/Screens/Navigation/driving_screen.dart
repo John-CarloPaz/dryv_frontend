@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -9,9 +8,12 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'package:dryvmobapp/Models/lat_lng.dart';
+import 'package:dryvmobapp/Services/app_file_logger.dart';
 import 'package:dryvmobapp/Services/backend_routing_service.dart';
 import 'package:dryvmobapp/Services/backend_route_geometry.dart';
+import 'package:dryvmobapp/Services/flood_community_report_service.dart';
 import 'package:dryvmobapp/Services/map_service.dart';
+import 'package:dryvmobapp/Services/realtime_flood_overlay_state.dart';
 import 'package:dryvmobapp/Services/route_line_overlay_service.dart';
 
 class BackendRouteStep {
@@ -94,12 +96,16 @@ class _RouteProjection {
 
 class DrivingScreen extends StatefulWidget {
   final BackendApprovedRoute approved;
+  final LatLng origin;
+  final LatLng destination;
   final String originLabel;
   final String destinationLabel;
 
   const DrivingScreen({
     super.key,
     required this.approved,
+    required this.origin,
+    required this.destination,
     required this.originLabel,
     required this.destinationLabel,
   });
@@ -121,7 +127,6 @@ class _DrivingScreenState extends State<DrivingScreen> {
   StreamSubscription<geo.Position>? _positionSub;
   LatLng? _lastGps;
   DateTime? _lastOverlayUpdateAt;
-  LatLng? _lastOverlayUpdateGps;
   int _lastNearestRouteIndex = 0;
 
   // Route metric cache / projection state.
@@ -153,6 +158,11 @@ class _DrivingScreenState extends State<DrivingScreen> {
 
   final MapService _mapService = MapService();
   bool _realtimeFloodEnabled = false;
+
+  late final VoidCallback _realtimeFloodGlobalListener;
+
+  final FloodCommunityReportService _communityReportService =
+      FloodCommunityReportService();
 
   // Thresholds (tuneable)
   static const double _arrivalRadiusMeters = 32.0;
@@ -189,6 +199,18 @@ class _DrivingScreenState extends State<DrivingScreen> {
     }
 
     _startLocationStream();
+
+    _realtimeFloodEnabled = RealtimeFloodOverlayState.isEnabled;
+    _realtimeFloodGlobalListener = () {
+      _setRealtimeFloodEnabled(
+        RealtimeFloodOverlayState.isEnabled,
+        updateGlobal: false,
+      );
+    };
+    RealtimeFloodOverlayState.enabled.addListener(_realtimeFloodGlobalListener);
+    AppFileLogger.instance.info(
+      'DrivingScreen initialized with steps: ${_steps.length}',
+    );
   }
 
   @override
@@ -247,6 +269,7 @@ class _DrivingScreenState extends State<DrivingScreen> {
                 onToggleNorthUp: _toggleNorthUp,
                 isFloodEnabled: _realtimeFloodEnabled,
                 onToggleFlood: _toggleRealtimeFlood,
+                onCommunityReport: _openCommunityReportSheet,
               ),
             ),
 
@@ -291,16 +314,66 @@ class _DrivingScreenState extends State<DrivingScreen> {
 
     await _mapService.attachMap(mapboxMap);
 
-    final coords =
-        BackendRouteGeometry.tryExtractLineStringCoordinates(
-          widget.approved.geometryGeoJson,
-        ) ??
-        widget.approved.waypoints;
+    final extracted = BackendRouteGeometry.tryExtractLineStringCoordinates(
+      widget.approved.geometryGeoJson,
+      originHint: widget.origin,
+      destinationHint: widget.destination,
+    );
 
-    _fullRouteCoords = coords;
+    final extractedGap = extracted == null
+        ? null
+        : BackendRouteGeometry.maxConsecutiveGapMeters(extracted);
+
+    final extractedBroken = extracted == null
+        ? true
+        : BackendRouteGeometry.isProbablyBroken(extracted);
+
+    final fromSteps = extractedBroken
+        ? BackendRouteGeometry.tryExtractFromStepsJson(
+            widget.approved.stepsJson,
+            originHint: widget.origin,
+            destinationHint: widget.destination,
+          )
+        : null;
+
+    List<LatLng> rawCoords;
+    String using;
+    if (extracted != null && !extractedBroken) {
+      rawCoords = extracted;
+      using = 'geometry';
+    } else if (fromSteps != null && fromSteps.length >= 2) {
+      rawCoords = fromSteps;
+      using = 'steps';
+    } else {
+      rawCoords = widget.approved.waypoints;
+      using = 'waypoints';
+    }
+
+    final chosenGap = rawCoords.length < 2
+        ? null
+        : BackendRouteGeometry.maxConsecutiveGapMeters(rawCoords);
+
+    AppFileLogger.instance.info(
+      'Driving overlay: extracted=${extracted?.length ?? 0} '
+      'steps=${fromSteps?.length ?? 0} '
+      'waypoints=${widget.approved.waypoints.length} '
+      'using=$using '
+      'broken=${extractedBroken ? 'yes' : 'no'} '
+      'maxGap=${chosenGap?.toStringAsFixed(1) ?? 'n/a'}m '
+      'first=${rawCoords.first.lat},${rawCoords.first.lng} '
+      'last=${rawCoords.last.lat},${rawCoords.last.lng}',
+    );
+
+    _fullRouteCoords = BackendRouteGeometry.cleanCoordinates(
+      BackendRouteGeometry.orientOriginToDestination(
+        rawCoords,
+        origin: widget.origin,
+        destination: widget.destination,
+      ),
+    );
 
     // Cache cumulative distances along the route for along-route progress + step advancement.
-    _routeCumMeters = _buildCumulativeMeters(coords);
+    _routeCumMeters = _buildCumulativeMeters(_fullRouteCoords);
 
     // Ensure the UI has a non-null remaining distance as soon as the route is ready.
     // This prevents the bottom sheet from showing "—" when GPS updates haven't
@@ -357,7 +430,13 @@ class _DrivingScreenState extends State<DrivingScreen> {
     await RouteLineOverlayService.applyWithProgress(
       mapboxMap: mapboxMap,
       completedCoordinates: const <LatLng>[],
-      remainingCoordinates: coords,
+      remainingCoordinates: _fullRouteCoords,
+    );
+
+    // Apply realtime flood overlay (if enabled globally) once the route exists.
+    await _setRealtimeFloodEnabled(
+      RealtimeFloodOverlayState.isEnabled,
+      updateGlobal: false,
     );
 
     // Enable puck AFTER the route line so it reliably renders above it.
@@ -386,6 +465,9 @@ class _DrivingScreenState extends State<DrivingScreen> {
   @override
   void dispose() {
     _positionSub?.cancel();
+    RealtimeFloodOverlayState.enabled.removeListener(
+      _realtimeFloodGlobalListener,
+    );
     _mapService.dispose();
     final mapboxMap = _mapboxMap;
     if (mapboxMap != null) {
@@ -597,7 +679,6 @@ class _DrivingScreenState extends State<DrivingScreen> {
     _lastProgressSegmentIndex = segIdx;
     _lastProgressAlongMeters = proj.alongMeters;
     _lastOverlayUpdateAt = now;
-    _lastOverlayUpdateGps = currentGps;
 
     // Build progress polylines with a split at the projected point.
     final projectedPoint = proj.projectedPoint;
@@ -732,32 +813,31 @@ class _DrivingScreenState extends State<DrivingScreen> {
   }
 
   Future<void> _toggleRealtimeFlood() async {
-    final map = _mapboxMap;
-    if (map == null) return;
-
-    final enabled = !_realtimeFloodEnabled;
-    setState(() => _realtimeFloodEnabled = enabled);
-
-    await _mapService.setRealtimeFloodEnabled(
-      enabled,
-      layerPosition: LayerPosition(
-        below: RouteLineOverlayService.completedLayerId,
-      ),
-    );
+    await _setRealtimeFloodEnabled(!_realtimeFloodEnabled, updateGlobal: true);
   }
 
-  int _findNearestRouteIndexGlobal(LatLng gps) {
-    final coords = _fullRouteCoords;
-    int bestIdx = 0;
-    double bestDist = double.infinity;
-    for (int i = 0; i < coords.length; i++) {
-      final d = _haversineMeters(gps, coords[i]);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
+  Future<void> _setRealtimeFloodEnabled(
+    bool enabled, {
+    required bool updateGlobal,
+  }) async {
+    if (!mounted) return;
+
+    if (_realtimeFloodEnabled != enabled) {
+      setState(() => _realtimeFloodEnabled = enabled);
     }
-    return bestIdx;
+
+    if (_mapService.isInitialized) {
+      await _mapService.setRealtimeFloodEnabled(
+        enabled,
+        layerPosition: LayerPosition(
+          below: RouteLineOverlayService.completedLayerId,
+        ),
+      );
+    }
+
+    if (updateGlobal) {
+      RealtimeFloodOverlayState.setEnabled(enabled);
+    }
   }
 
   Future<Uint8List> _buildOriginPuckLikeImageBytes({int sizePx = 96}) async {
@@ -848,30 +928,6 @@ class _DrivingScreenState extends State<DrivingScreen> {
     }
   }
 
-  ({int index, double nearestDistanceMeters}) _findNearestRouteIndex(
-    LatLng gps,
-  ) {
-    final coords = _fullRouteCoords;
-    if (coords.isEmpty)
-      return (index: 0, nearestDistanceMeters: double.infinity);
-
-    // Windowed search around the last index for speed.
-    final start = math.max(0, _lastNearestRouteIndex - 20);
-    final end = math.min(coords.length - 1, _lastNearestRouteIndex + 120);
-
-    int bestIdx = start;
-    double bestDist = double.infinity;
-    for (int i = start; i <= end; i++) {
-      final d = _haversineMeters(gps, coords[i]);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-
-    return (index: bestIdx, nearestDistanceMeters: bestDist);
-  }
-
   double _haversineMeters(LatLng a, LatLng b) {
     const earthRadiusMeters = 6371000.0;
 
@@ -907,6 +963,268 @@ class _DrivingScreenState extends State<DrivingScreen> {
     if (d == null || d.isNaN || d.isInfinite) return '—';
     if (d < 1000) return '${d.round()} m';
     return '${(d / 1000.0).toStringAsFixed(1)} km';
+  }
+
+  void _openCommunityReportSheet() {
+    if (!mounted) return;
+
+    final gps = _lastGps;
+    if (gps == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Waiting for GPS… try again in a moment.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        bool sending = false;
+
+        // Lightweight rebuild on local `sending` changes without introducing
+        // a new page/state object.
+        return StatefulBuilder(
+          builder: (context, setState) {
+            Future<void> submitWithState(FloodDepthLevel level) async {
+              if (sending) return;
+              setState(() => sending = true);
+              try {
+                HapticFeedback.selectionClick();
+                await _communityReportService.submit(
+                  location: gps,
+                  depthLevel: level,
+                );
+                if (context.mounted) Navigator.of(context).pop();
+                if (!mounted) return;
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Report sent. Thank you for helping others.'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Failed to send report.'),
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              } finally {
+                if (mounted) setState(() => sending = false);
+              }
+            }
+
+            final theme = Theme.of(context);
+            final colorScheme = theme.colorScheme;
+
+            Widget depthTile({
+              required FloodDepthLevel level,
+              required IconData icon,
+              required String helper,
+            }) {
+              final enabled = !sending;
+              return Semantics(
+                button: true,
+                enabled: enabled,
+                label: 'Report ${level.label}',
+                child: Material(
+                  color: colorScheme.surface,
+                  elevation: enabled ? 1 : 0,
+                  shadowColor: theme.shadowColor.withValues(alpha: 0.12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: enabled ? () => submitWithState(level) : null,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: colorScheme.primary.withValues(
+                                alpha: 0.12,
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Icon(icon, color: colorScheme.primary),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            level.label,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 15,
+                              color: colorScheme.onSurface,
+                              height: 1.05,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            helper,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.65,
+                              ),
+                              height: 1.15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            return SafeArea(
+              top: false,
+              child: Material(
+                color: colorScheme.surface,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (sending) const LinearProgressIndicator(minHeight: 3),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary.withValues(
+                                      alpha: 0.12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(
+                                    Icons.water_drop_outlined,
+                                    color: colorScheme.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Report flood depth',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w900,
+                                          color: colorScheme.onSurface,
+                                          height: 1.05,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'One tap sends your report using current GPS.',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: colorScheme.onSurface
+                                              .withValues(alpha: 0.65),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Close',
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  icon: Icon(
+                                    Icons.close,
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.75,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            GridView(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    crossAxisSpacing: 12,
+                                    mainAxisSpacing: 12,
+                                    childAspectRatio: 1.25,
+                                  ),
+                              children: [
+                                depthTile(
+                                  level: FloodDepthLevel.ankleDeep,
+                                  icon: Icons.directions_walk,
+                                  helper: 'Shallow water',
+                                ),
+                                depthTile(
+                                  level: FloodDepthLevel.kneeDeep,
+                                  icon: Icons.accessibility_new,
+                                  helper: 'Use caution',
+                                ),
+                                depthTile(
+                                  level: FloodDepthLevel.waistDeep,
+                                  icon: Icons.person,
+                                  helper: 'High risk',
+                                ),
+                                depthTile(
+                                  level: FloodDepthLevel.chestDeep,
+                                  icon: Icons.person_outline,
+                                  helper: 'Very dangerous',
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Only report if safe to do so.',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: colorScheme.onSurface.withValues(
+                                  alpha: 0.55,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 }
 
@@ -1168,12 +1486,14 @@ class _RightButtonGroup extends StatelessWidget {
   final VoidCallback onToggleNorthUp;
   final bool isFloodEnabled;
   final VoidCallback onToggleFlood;
+  final VoidCallback onCommunityReport;
 
   const _RightButtonGroup({
     required this.isNorthUp,
     required this.onToggleNorthUp,
     required this.isFloodEnabled,
     required this.onToggleFlood,
+    required this.onCommunityReport,
   });
 
   @override
@@ -1191,6 +1511,15 @@ class _RightButtonGroup extends StatelessWidget {
             Icons.explore,
             color: isNorthUp ? const Color(0xFF0B7D5A) : Colors.grey,
           ),
+        ),
+        const SizedBox(height: 10),
+        FloatingActionButton(
+          heroTag: 'fab-community-report-driving',
+          backgroundColor: Colors.white,
+          mini: true,
+          elevation: 2,
+          onPressed: onCommunityReport,
+          child: const Icon(Icons.campaign_outlined, color: Color(0xFF0B7D5A)),
         ),
         const SizedBox(height: 10),
         FloatingActionButton(

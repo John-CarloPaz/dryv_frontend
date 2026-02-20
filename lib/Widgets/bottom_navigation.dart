@@ -84,12 +84,12 @@ class _BottomNavWidgetState extends State<BottomNavWidget> {
               destinations: const [
                 NavigationDestination(icon: Icon(Icons.map), label: 'Home'),
                 NavigationDestination(
-                  icon: Icon(Icons.campaign),
-                  label: 'Forecast',
+                  icon: Icon(Icons.location_city_outlined),
+                  label: 'Crucial',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.travel_explore),
-                  label: 'Search',
+                  icon: Icon(Icons.campaign),
+                  label: 'Forecast',
                 ),
               ],
             ),

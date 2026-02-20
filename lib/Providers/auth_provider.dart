@@ -1,15 +1,30 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-class AuthTokenNotifier extends Notifier<String?> {
+const _kAuthTokenKey = 'auth_token';
+
+class AuthTokenController extends AsyncNotifier<String?> {
   @override
-  String? build() => null;
+  FutureOr<String?> build() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kAuthTokenKey);
+  }
 
-  void setToken(String? token) => state = token;
+  Future<void> setToken(String token) async {
+    state = AsyncData(token);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kAuthTokenKey, token);
+  }
 
-  void clear() => state = null;
+  Future<void> clear() async {
+    state = const AsyncData(null);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kAuthTokenKey);
+  }
 }
 
-// Simple in-memory auth token provider.
-final authProvider = NotifierProvider<AuthTokenNotifier, String?>(
-  AuthTokenNotifier.new,
+final authTokenProvider = AsyncNotifierProvider<AuthTokenController, String?>(
+  AuthTokenController.new,
 );

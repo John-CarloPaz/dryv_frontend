@@ -1,5 +1,10 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+
+import 'package:dryvmobapp/Services/community_flood_overlay_service.dart';
+import 'package:dryvmobapp/Services/realtime_flood_overlay_state.dart';
 
 class FloodOverlayVisibility {
   final bool floodMap;
@@ -31,6 +36,10 @@ class LayerButtonWidget extends StatefulWidget {
 class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   bool _isFloodLayerVisible = false;
   bool _isRealtimeFloodLayerVisible = false;
+  bool _isCommunityReportedFloodsVisible = false;
+
+  final CommunityFloodOverlayService _communityFloodOverlayService =
+      CommunityFloodOverlayService();
 
   void _notifyOverlayVisibility() {
     widget.onFloodOverlayVisibilityChanged?.call(
@@ -114,78 +123,158 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   void _showLayerDrawer(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: false,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
+      builder: (sheetContext) {
         final floodDisabled = _isRealtimeFloodLayerVisible;
         final realtimeDisabled = _isFloodLayerVisible;
 
-        return Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Map Layers',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              ListTile(
-                leading: const Icon(Icons.map),
-                title: const Text('Mapbox Streets'),
-                onTap: () {
-                  _changeMapStyle('mapbox://styles/mapbox/streets-v12');
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.terrain),
-                title: const Text('Satellite View'),
-                onTap: () {
-                  _changeMapStyle(
-                    'mapbox://styles/mapbox/satellite-streets-v12',
-                  );
-                  Navigator.pop(context);
-                },
-              ),
-              SwitchListTile(
-                secondary: Icon(
-                  Icons.water,
-                  color: floodDisabled ? Colors.grey : null,
+        final textTheme = Theme.of(sheetContext).textTheme;
+        final colorScheme = Theme.of(sheetContext).colorScheme;
+        final sheetHeight = MediaQuery.of(sheetContext).size.height * 0.78;
+
+        return SizedBox(
+          height: sheetHeight,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: colorScheme.onSurface.withValues(alpha: 0.20),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
                 ),
-                title: const Text('Flood Map Layer'),
-                subtitle: floodDisabled
-                    ? const Text('Turn off Realtime Flood Layer to enable')
-                    : null,
-                value: _isFloodLayerVisible,
-                onChanged: floodDisabled
-                    ? null
-                    : (value) async {
-                        await _toggleFloodLayer();
-                        if (context.mounted) Navigator.pop(context);
-                      },
-              ),
-              SwitchListTile(
-                secondary: Icon(
-                  Icons.waves,
-                  color: realtimeDisabled ? Colors.grey : null,
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Layers',
+                        style: textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
                 ),
-                title: const Text('Realtime Flood Layer'),
-                subtitle: realtimeDisabled
-                    ? const Text('Turn off Flood Map Layer to enable')
-                    : null,
-                value: _isRealtimeFloodLayerVisible,
-                onChanged: realtimeDisabled
-                    ? null
-                    : (value) async {
-                        await _toggleRealtimeFloodLayer();
-                        if (context.mounted) Navigator.pop(context);
-                      },
-              ),
-            ],
+                const SizedBox(height: 8),
+                Text(
+                  'Map style',
+                  style: textTheme.labelLarge?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: () {
+                          _changeMapStyle('mapbox://styles/mapbox/streets-v12');
+                          Navigator.of(sheetContext).pop();
+                        },
+                        icon: const Icon(Icons.map_outlined),
+                        label: const Text('Streets'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const ui.Size(0, 56),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: () {
+                          _changeMapStyle(
+                            'mapbox://styles/mapbox/satellite-streets-v12',
+                          );
+                          Navigator.of(sheetContext).pop();
+                        },
+                        icon: const Icon(Icons.terrain_outlined),
+                        label: const Text('Satellite'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const ui.Size(0, 56),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'Overlays',
+                  style: textTheme.labelLarge?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _LayerToggleCard(
+                  icon: Icons.water_outlined,
+                  title: 'Flood map',
+                  subtitle: floodDisabled
+                      ? 'Turn off “Realtime flood” to enable'
+                      : 'Pampanga flood tileset overlay',
+                  value: _isFloodLayerVisible,
+                  enabled: !floodDisabled,
+                  onChanged: floodDisabled
+                      ? null
+                      : (value) async {
+                          await _toggleFloodLayer();
+                          if (sheetContext.mounted) {
+                            Navigator.of(sheetContext).pop();
+                          }
+                        },
+                ),
+                const SizedBox(height: 10),
+                _LayerToggleCard(
+                  icon: Icons.waves_outlined,
+                  title: 'Realtime flood',
+                  subtitle: realtimeDisabled
+                      ? 'Turn off “Flood map” to enable'
+                      : 'Live risk overlay (low → high)',
+                  value: _isRealtimeFloodLayerVisible,
+                  enabled: !realtimeDisabled,
+                  onChanged: realtimeDisabled
+                      ? null
+                      : (value) async {
+                          await _toggleRealtimeFloodLayer();
+                          if (sheetContext.mounted) {
+                            Navigator.of(sheetContext).pop();
+                          }
+                        },
+                ),
+                const SizedBox(height: 10),
+                _LayerToggleCard(
+                  icon: Icons.people_alt_outlined,
+                  title: 'Community reported floods',
+                  subtitle: 'Reported flooded roads (community)',
+                  value: _isCommunityReportedFloodsVisible,
+                  enabled: true,
+                  onChanged: (value) async {
+                    await _toggleCommunityReportedFloods();
+                    if (sheetContext.mounted) {
+                      Navigator.of(sheetContext).pop();
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -215,6 +304,65 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     }
     if (_isRealtimeFloodLayerVisible) {
       await _addRealtimeFloodLayer();
+    }
+
+    if (_isCommunityReportedFloodsVisible) {
+      try {
+        await _communityFloodOverlayService.setEnabled(
+          mapboxMap: widget.mapboxMap,
+          enabled: true,
+          layerPosition: await _communityOverlayLayerPosition(),
+        );
+      } catch (_) {
+        // If community overlay fails to re-apply (e.g., network/auth), keep the
+        // toggle state but don't crash the style change.
+      }
+    }
+  }
+
+  Future<LayerPosition?> _communityOverlayLayerPosition() async {
+    final style = widget.mapboxMap.style;
+
+    if (_isRealtimeFloodLayerVisible) {
+      const topRealtimeLayerId = 'realtime-flood-layer-3';
+      final exists = await style.styleLayerExists(topRealtimeLayerId);
+      if (exists) return LayerPosition(above: topRealtimeLayerId);
+    }
+
+    if (_isFloodLayerVisible) {
+      const topFloodLayerId = 'flood-layer-var3';
+      final exists = await style.styleLayerExists(topFloodLayerId);
+      if (exists) return LayerPosition(above: topFloodLayerId);
+    }
+
+    return _overlayBaseLayerPosition();
+  }
+
+  Future<void> _toggleCommunityReportedFloods() async {
+    final mapboxMap = widget.mapboxMap;
+    final nextEnabled = !_isCommunityReportedFloodsVisible;
+
+    try {
+      await _communityFloodOverlayService.setEnabled(
+        mapboxMap: mapboxMap,
+        enabled: nextEnabled,
+        layerPosition: nextEnabled
+            ? await _communityOverlayLayerPosition()
+            : null,
+      );
+
+      if (!mounted) return;
+      setState(() => _isCommunityReportedFloodsVisible = nextEnabled);
+      // notify parent to re-apply overlays if needed
+      widget.onStyleChanged?.call();
+    } catch (e, st) {
+      debugPrint('❌ Failed to toggle community flooded roads overlay: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to load community reported floods'),
+        ),
+      );
     }
   }
 
@@ -354,6 +502,7 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       setState(() => _isRealtimeFloodLayerVisible = false);
       _notifyOverlayVisibility();
       widget.onStyleChanged?.call();
+      RealtimeFloodOverlayState.setEnabled(false);
       return;
     }
 
@@ -368,11 +517,12 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       await _addRealtimeFloodLayer();
       setState(() => _isRealtimeFloodLayerVisible = true);
       _notifyOverlayVisibility();
-      debugPrint('✅ Realtime flood layer loaded from dryv_b.');
+      debugPrint('✅ Realtime flood layer loaded from realtime tileset.');
       widget.onStyleChanged?.call();
+      RealtimeFloodOverlayState.setEnabled(true);
     } catch (ePrimary, stPrimary) {
       debugPrint(
-        '❌ Failed to load realtime dryv_b tileset: $ePrimary\n$stPrimary',
+        '❌ Failed to load realtime flood tileset: $ePrimary\n$stPrimary',
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -404,13 +554,13 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     final mapboxMap = widget.mapboxMap;
 
     const sourceId = 'realtime-flood-source';
-    const outlineLayerId = 'realtime-flood-outline';
     const fillLayerId1 = 'realtime-flood-layer-1';
     const fillLayerId2 = 'realtime-flood-layer-2';
     const fillLayerId3 = 'realtime-flood-layer-3';
 
     // Use hosted vector tileset for realtime flood view.
-    const primaryTilesetUrl = 'mapbox://johncarlo123.dryv';
+    // Keep in sync with MapService realtime flood tileset.
+    const primaryTilesetUrl = 'mapbox://johncarlo123.dryv_tileset_1';
 
     await _removeRealtimeFloodLayer();
 
@@ -429,7 +579,7 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
         ['get', 'risk_level'],
         1,
       ],
-      fillColor: Colors.lightBlue.withValues(alpha: 0.6).toARGB32(),
+      fillColor: Colors.yellow.withValues(alpha: 0.6).toARGB32(),
     );
     if (basePosition != null) {
       await mapboxMap.style.addLayerAt(realtimeFill1, basePosition);
@@ -447,7 +597,7 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
           ['get', 'risk_level'],
           2,
         ],
-        fillColor: Colors.blue.withValues(alpha: 0.6).toARGB32(),
+        fillColor: Colors.orange.withValues(alpha: 0.6).toARGB32(),
       ),
       LayerPosition(above: fillLayerId1),
     );
@@ -462,20 +612,9 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
           ['get', 'risk_level'],
           3,
         ],
-        fillColor: Colors.blue.withValues(alpha: 0.9).toARGB32(),
+        fillColor: Colors.red.withValues(alpha: 0.6).toARGB32(),
       ),
       LayerPosition(above: fillLayerId2),
-    );
-
-    await mapboxMap.style.addLayerAt(
-      LineLayer(
-        id: outlineLayerId,
-        sourceId: sourceId,
-        sourceLayer: 'flooded',
-        lineColor: Colors.cyan.withValues(alpha: 0.9).toARGB32(),
-        lineWidth: 1.0,
-      ),
-      LayerPosition(above: fillLayerId3),
     );
   }
 
@@ -483,10 +622,71 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   Widget build(BuildContext context) {
     return FloatingActionButton(
       backgroundColor: Colors.white,
+      heroTag: 'fab-layers',
+      tooltip: 'Layers',
       mini: true,
       elevation: 2,
       onPressed: () => _showLayerDrawer(context),
       child: const Icon(Icons.layers, color: Colors.grey),
+    );
+  }
+}
+
+class _LayerToggleCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool>? onChanged;
+
+  const _LayerToggleCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    final effectiveOnChanged = enabled ? onChanged : null;
+    final leadingColor = enabled
+        ? colorScheme.onSurface.withValues(alpha: 0.75)
+        : colorScheme.onSurface.withValues(alpha: 0.35);
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        enabled: enabled,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        minVerticalPadding: 14,
+        leading: CircleAvatar(
+          radius: 22,
+          backgroundColor: value
+              ? colorScheme.primary.withValues(alpha: 0.14)
+              : colorScheme.onSurface.withValues(alpha: 0.06),
+          child: Icon(icon, color: value ? colorScheme.primary : leadingColor),
+        ),
+        title: Text(
+          title,
+          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurface.withValues(alpha: 0.72),
+          ),
+        ),
+        trailing: Switch.adaptive(value: value, onChanged: effectiveOnChanged),
+        onTap: effectiveOnChanged == null
+            ? null
+            : () => effectiveOnChanged(!value),
+      ),
     );
   }
 }

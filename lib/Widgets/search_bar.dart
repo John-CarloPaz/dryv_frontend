@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'package:dryvmobapp/Screens/Profile/profile_screen.dart';
+import 'package:dryvmobapp/theme/app_colors.dart';
+
 class SearchBarWidget extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onProfileTap;
@@ -20,10 +23,10 @@ class SearchBarWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const cPrimary = Color(0xFF13005A);
-    const cDarkBlue = Color(0xFF00337C);
-    const cBlue = Color(0xFF1C82AD);
-    const cAccent = Color(0xFF03C988);
+    const cPrimary = AppColors.primary;
+    const cDarkBlue = AppColors.darkBlue;
+    const cBlue = AppColors.blue;
+    const cAccent = AppColors.accent;
 
     return SafeArea(
       child: Padding(
@@ -83,9 +86,9 @@ class SearchBarWidget extends StatelessWidget {
                     customBorder: const CircleBorder(),
                     onTap: onProfileTap ??
                         () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Profile page coming soon.'),
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const ProfileScreen(),
                             ),
                           );
                         },

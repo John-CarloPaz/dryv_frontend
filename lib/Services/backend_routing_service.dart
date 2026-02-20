@@ -33,15 +33,18 @@ class BackendRoutingService {
   Future<BackendApprovedRoute> fetchSafestRoute({
     required LatLng origin,
     required LatLng destination,
+    String vehicleType = 'car',
+    bool avoidMotorways = false,
   }) async {
     AppFileLogger.instance.info(
-      'Fetching safest route: endpoint=$safestRouteEndpoint origin=${origin.lat},${origin.lng} dest=${destination.lat},${destination.lng}',
+      'Fetching safest route: endpoint=$safestRouteEndpoint origin=${origin.lat},${origin.lng} dest=${destination.lat},${destination.lng} vehicleType=$vehicleType avoidMotorways=$avoidMotorways',
     );
 
     final body = jsonEncode({
       'origin': {'lat': origin.lat, 'lng': origin.lng},
       'destination': {'lat': destination.lat, 'lng': destination.lng},
-      'vehicle_type': 'car',
+      'vehicle_type': vehicleType,
+      'avoid_motorway': avoidMotorways,
     });
 
     late final http.Response resp;
@@ -214,6 +217,23 @@ class BackendRoutingService {
     final primaryRoute = routesRaw.first as Map;
     final geometry = primaryRoute['geometry'];
 
+    try {
+      if (geometry is Map) {
+        final t = geometry['type'];
+        final coords = geometry['coordinates'];
+        final n = coords is List ? coords.length : null;
+        AppFileLogger.instance.info(
+          'Backend geometry: type=$t coordCount=${n ?? 'unknown'}',
+        );
+      } else {
+        AppFileLogger.instance.info(
+          'Backend geometry: runtimeType=${geometry.runtimeType}',
+        );
+      }
+    } catch (_) {
+      // Ignore logging errors.
+    }
+
     // Optional summary fields.
     final distanceMeters = _tryParseDouble(primaryRoute['distance']);
     final durationSeconds = _tryParseDouble(primaryRoute['duration']);
@@ -266,7 +286,9 @@ class BackendRoutingService {
     return (a.lat - b.lat).abs() < eps && (a.lng - b.lng).abs() < eps;
   }
 
-  List<Map<String, dynamic>>? _extractStepsJson(Map<String, dynamic> primaryRoute) {
+  List<Map<String, dynamic>>? _extractStepsJson(
+    Map<String, dynamic> primaryRoute,
+  ) {
     List<dynamic>? legs;
 
     final directLegs = primaryRoute['legs'];
@@ -284,7 +306,8 @@ class BackendRoutingService {
         directionsRoute = Map<String, dynamic>.from(directionsRouteObj);
       } else {
         final candidate =
-            primaryRoute['directions_route_json'] ?? primaryRoute['directionsRouteJson'];
+            primaryRoute['directions_route_json'] ??
+            primaryRoute['directionsRouteJson'];
         if (candidate is String && candidate.trim().isNotEmpty) {
           try {
             final dyn = jsonDecode(candidate);

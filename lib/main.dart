@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:dryvmobapp/Widgets/bottom_navigation.dart';
-import 'package:dryvmobapp/Screens/Search/search_screen.dart';
+import 'package:dryvmobapp/Screens/Forecast/forecast_screen.dart';
+import 'package:dryvmobapp/Screens/CrucialLocations/crucial_locations_screen.dart';
 
 import 'package:dryvmobapp/Services/app_file_logger.dart';
 
 // Screens
 import 'package:dryvmobapp/Screens/Map/map_display.dart';
+import 'package:dryvmobapp/Screens/Authentication/login_page.dart';
+import 'package:dryvmobapp/Screens/Authentication/registration_page.dart';
+import 'package:dryvmobapp/Screens/Authentication/forgot_password_page.dart';
+import 'package:dryvmobapp/Screens/Legal/terms_and_conditions_page.dart';
+import 'package:dryvmobapp/Screens/Intro/intro_gate.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +51,7 @@ void main() async {
     );
   }
 
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 class MyApp extends StatelessWidget {
@@ -68,9 +75,16 @@ class MyApp extends StatelessWidget {
           type: BottomNavigationBarType.fixed,
         ),
       ),
-      home: const BottomNavWidget(
-        pages: [MapScreen(), SearchScreen(), Placeholder(), Placeholder()],
-      ),
+      routes: {
+        '/auth/login': (_) => const LoginPage(),
+        '/auth/register': (_) => const RegistrationPage(),
+        '/auth/forgot-password': (_) => const ForgotPasswordPage(),
+        '/terms': (_) => const TermsAndConditionsPage(),
+        '/home': (_) => const BottomNavWidget(
+          pages: [MapScreen(), CrucialLocationsScreen(), ForecastScreen()],
+        ),
+      },
+      home: const IntroGate(),
     );
   }
 }

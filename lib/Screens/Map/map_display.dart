@@ -38,6 +38,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   bool _userLocationEnabled = false;
   ViewportState? _viewport;
 
+  bool _avoidMotorways = false;
+  VehicleType _vehicleType = VehicleType.car;
+
   bool _pendingLocationAutoRetry = false;
 
   @override
@@ -81,6 +84,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 mapboxMap: mapboxMap,
                 isUserLocationEnabled: _userLocationEnabled,
                 onToggleUserLocation: _toggleUserLocation,
+                avoidMotorways: _avoidMotorways,
+                onAvoidMotorwaysChanged: (value) {
+                  setState(() => _avoidMotorways = value);
+                },
+                vehicleType: _vehicleType,
+                onVehicleTypeChanged: (value) {
+                  setState(() => _vehicleType = value);
+                },
               ),
             ),
         ],
@@ -399,6 +410,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       approved = await service.fetchSafestRoute(
         origin: origin,
         destination: destination,
+        vehicleType: _vehicleType.apiValue,
+        avoidMotorways: _avoidMotorways,
       );
     } on BackendRoutingException catch (e) {
       AppFileLogger.instance.warn(
@@ -430,6 +443,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       MaterialPageRoute(
         builder: (_) => RoutePreviewScreen(
           approved: approved,
+          origin: origin,
+          destination: destination,
           originLabel: 'Your location',
           destinationLabel: destinationName,
         ),

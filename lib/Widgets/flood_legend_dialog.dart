@@ -196,8 +196,8 @@ class FloodLegendDialog extends StatelessWidget {
                         ),
                         const SizedBox(height: 10),
                         legendRow(
-                          color: const Color(0xFF2ECC71),
-                          title: 'Green — Passable (all vehicle types)',
+                          color: const Color(0xFFF1C40F),
+                          title: 'Yellow — Passable (all vehicle types)',
                           subtitle: 'Gutter level to half knee level flooding.',
                         ),
                       ],

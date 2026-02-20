@@ -1,18 +1,30 @@
 import 'package:dryvmobapp/Widgets/layers_button.dart';
 import 'package:dryvmobapp/Widgets/flood_legend_dialog.dart';
+import 'package:dryvmobapp/Widgets/route_settings_button.dart';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+
+export 'route_settings_button.dart' show VehicleType, VehicleTypeX;
 
 class GroupedButtons extends StatefulWidget {
   final MapboxMap mapboxMap;
   final bool isUserLocationEnabled;
   final VoidCallback onToggleUserLocation;
 
+  final bool avoidMotorways;
+  final ValueChanged<bool> onAvoidMotorwaysChanged;
+  final VehicleType vehicleType;
+  final ValueChanged<VehicleType> onVehicleTypeChanged;
+
   const GroupedButtons({
     super.key,
     required this.mapboxMap,
     required this.isUserLocationEnabled,
     required this.onToggleUserLocation,
+    required this.avoidMotorways,
+    required this.onAvoidMotorwaysChanged,
+    required this.vehicleType,
+    required this.onVehicleTypeChanged,
   });
 
   @override
@@ -67,6 +79,13 @@ class _GroupedButtonsState extends State<GroupedButtons> {
             if (!mounted) return;
             setState(() => _overlayVisibility = visibility);
           },
+        ),
+        const SizedBox(height: 10),
+        RouteSettingsButton(
+          avoidMotorways: widget.avoidMotorways,
+          onAvoidMotorwaysChanged: widget.onAvoidMotorwaysChanged,
+          vehicleType: widget.vehicleType,
+          onVehicleTypeChanged: widget.onVehicleTypeChanged,
         ),
         if (_overlayVisibility.any) ...[
           const SizedBox(height: 10),

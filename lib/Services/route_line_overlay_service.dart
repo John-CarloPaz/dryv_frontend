@@ -11,7 +11,9 @@ class RouteLineOverlayService {
   static const String completedSourceId = 'dryv-backend-route-completed-source';
   static const String completedLayerId = 'dryv-backend-route-completed-layer';
 
-  static Future<LayerPosition?> _defaultRouteLayerPosition(StyleManager style) async {
+  static Future<LayerPosition?> _defaultRouteLayerPosition(
+    StyleManager style,
+  ) async {
     // Prefer inserting below an existing *base style* label layer.
     // This keeps the route above roads but below overlays like the puck/annotations.
     const baseLabelLayerCandidates = <String>[
@@ -108,16 +110,19 @@ class RouteLineOverlayService {
     }
 
     final completedGeoJson = completedCoordinates.length >= 2
-        ? BackendRouteGeometry.lineStringGeoJsonFromLatLngs(completedCoordinates)
-        : BackendRouteGeometry.lineStringGeoJsonFromLatLngs(
+        ? BackendRouteGeometry.routeGeoJsonFromLatLngs(completedCoordinates)
+        : BackendRouteGeometry.routeGeoJsonFromLatLngs(
             remainingCoordinates.length >= 2
-                ? <LatLng>[remainingCoordinates.first, remainingCoordinates.first]
+                ? <LatLng>[
+                    remainingCoordinates.first,
+                    remainingCoordinates.first,
+                  ]
                 : const <LatLng>[],
           );
 
     final remainingGeoJson = remainingCoordinates.length >= 2
-        ? BackendRouteGeometry.lineStringGeoJsonFromLatLngs(remainingCoordinates)
-        : BackendRouteGeometry.lineStringGeoJsonFromLatLngs(
+        ? BackendRouteGeometry.routeGeoJsonFromLatLngs(remainingCoordinates)
+        : BackendRouteGeometry.routeGeoJsonFromLatLngs(
             completedCoordinates.length >= 2
                 ? <LatLng>[completedCoordinates.last, completedCoordinates.last]
                 : const <LatLng>[],
@@ -136,6 +141,8 @@ class RouteLineOverlayService {
       lineColor: completedColor.toARGB32(),
       lineWidth: completedWidth,
       lineOpacity: completedOpacity,
+      lineCap: LineCap.ROUND,
+      lineJoin: LineJoin.ROUND,
     );
 
     if (routeLayerPosition != null) {
@@ -149,6 +156,8 @@ class RouteLineOverlayService {
       sourceId: remainingSourceId,
       lineColor: remainingColor.toARGB32(),
       lineWidth: remainingWidth,
+      lineCap: LineCap.ROUND,
+      lineJoin: LineJoin.ROUND,
     );
 
     // Ensure the remaining line sits above the completed line.
@@ -187,18 +196,26 @@ class RouteLineOverlayService {
     }
 
     final completedGeoJson = completedCoordinates.length >= 2
-        ? BackendRouteGeometry.lineStringGeoJsonFromLatLngs(completedCoordinates)
+        ? BackendRouteGeometry.routeGeoJsonFromLatLngs(completedCoordinates)
         : null;
     final remainingGeoJson = remainingCoordinates.length >= 2
-        ? BackendRouteGeometry.lineStringGeoJsonFromLatLngs(remainingCoordinates)
+        ? BackendRouteGeometry.routeGeoJsonFromLatLngs(remainingCoordinates)
         : null;
 
     try {
       if (completedGeoJson != null) {
-        await style.setStyleSourceProperty(completedSourceId, 'data', completedGeoJson);
+        await style.setStyleSourceProperty(
+          completedSourceId,
+          'data',
+          completedGeoJson,
+        );
       }
       if (remainingGeoJson != null) {
-        await style.setStyleSourceProperty(remainingSourceId, 'data', remainingGeoJson);
+        await style.setStyleSourceProperty(
+          remainingSourceId,
+          'data',
+          remainingGeoJson,
+        );
       }
     } catch (_) {
       await applyWithProgress(
