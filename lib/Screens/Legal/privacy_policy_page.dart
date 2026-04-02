@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:dryvmobapp/theme/app_colors.dart';
 
-class TermsAndConditionsPage extends StatelessWidget {
-  const TermsAndConditionsPage({super.key});
+class PrivacyPolicyPage extends StatelessWidget {
+  const PrivacyPolicyPage({super.key});
 
   static const String lastUpdated = 'February 2026';
 
@@ -40,7 +40,7 @@ class TermsAndConditionsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Terms and Conditions'),
+        title: const Text('Privacy Policy'),
         foregroundColor: AppColors.primary,
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
@@ -53,69 +53,6 @@ class TermsAndConditionsPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _h1(context, 'Terms and Conditions'),
-                  _spacer(8),
-                  _p(context, 'Last Updated: $lastUpdated'),
-                  _spacer(2),
-                  _p(
-                    context,
-                    'Owned and Operated by: YunoH, CCIS 8C, Systems Plus College Foundation',
-                  ),
-                  _spacer(16),
-
-                  _h2(context, '1. Acceptance of Terms'),
-                  _spacer(6),
-                  _p(
-                    context,
-                    'By accessing or using AlistoPH, you agree to be bound by these Terms and Conditions. If you do not agree, do not use the application.',
-                  ),
-                  _spacer(14),
-
-                  _h2(context, '2. Accounts'),
-                  _spacer(6),
-                  _p(
-                    context,
-                    'You may be required to create an account to access features. You are responsible for maintaining the confidentiality of your account and for activities that occur under it.',
-                  ),
-                  _spacer(14),
-
-                  _h2(context, '3. Location & Flood Reporting'),
-                  _spacer(6),
-                  _p(
-                    context,
-                    'The application uses real‑time GPS location to provide navigation, hazard detection, and flood‑aware routing. Users may also submit community flood reports. Only submit reports if it is safe to do so and ensure submitted information is accurate to the best of your knowledge.',
-                  ),
-                  _spacer(14),
-
-                  _h2(context, '4. Third‑Party Services'),
-                  _spacer(6),
-                  _p(
-                    context,
-                    'AlistoPH integrates third‑party services for maps and weather/flood data. Those providers may have their own terms and privacy policies that apply to their services.',
-                  ),
-                  _spacer(14),
-
-                  _h2(context, '5. Disclaimers'),
-                  _spacer(6),
-                  _p(
-                    context,
-                    'AlistoPH provides flood alerts and route guidance to assist decision‑making, but conditions can change rapidly. The application does not guarantee that routes are risk‑free or that hazards will always be detected.',
-                  ),
-                  _spacer(14),
-
-                  _h2(context, '6. Contact'),
-                  _spacer(6),
-                  _p(context, 'For concerns, contact: alistoph1357@gmail.com'),
-                  _spacer(18),
-
-                  _h1(context, 'Privacy Policy (Included for Reference)'),
-                  _spacer(8),
-                  _p(
-                    context,
-                    'This Privacy Policy is included here for convenience and is also available on the separate Privacy Policy page.',
-                  ),
-                  _spacer(16),
-
                   _h1(
                     context,
                     'AlistoPH: A Flood‑Aware Route Planning Navigation Application',

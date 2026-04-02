@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:dryvmobapp/Services/bottom_nav_visibility.dart';
+import 'package:dryvmobapp/Services/bottom_nav_state.dart';
 
 class BottomNavWidget extends StatefulWidget {
   final List<Widget> pages;
@@ -17,7 +18,7 @@ class BottomNavWidget extends StatefulWidget {
 }
 
 class _BottomNavWidgetState extends State<BottomNavWidget> {
-  late int _currentIndex;
+  late int _initialIndex;
 
   static const _cPrimary = Color(0xFF13005A);
   static const _cDarkBlue = Color(0xFF00337C);
@@ -27,23 +28,32 @@ class _BottomNavWidgetState extends State<BottomNavWidget> {
   @override
   void initState() {
     super.initState();
-    _currentIndex = widget.initialIndex;
+    _initialIndex = widget.initialIndex;
+    BottomNavState.setIndex(_initialIndex);
   }
 
   void _onTabTapped(int index) {
-    setState(() => _currentIndex = index);
+    BottomNavState.setIndex(index);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: widget.pages),
+      body: ValueListenableBuilder<int>(
+        valueListenable: BottomNavState.index,
+        builder: (context, index, _) {
+          return IndexedStack(index: index, children: widget.pages);
+        },
+      ),
       bottomNavigationBar: ValueListenableBuilder<int>(
         valueListenable: BottomNavVisibility.hideCountListenable,
         builder: (context, hideCount, _) {
           if (hideCount > 0) return const SizedBox.shrink();
 
-          return NavigationBarTheme(
+          return ValueListenableBuilder<int>(
+            valueListenable: BottomNavState.index,
+            builder: (context, index, _) {
+              return NavigationBarTheme(
             data: NavigationBarThemeData(
               backgroundColor: Colors.white,
               elevation: 8,
@@ -78,7 +88,7 @@ class _BottomNavWidgetState extends State<BottomNavWidget> {
               ),
             ),
             child: NavigationBar(
-              selectedIndex: _currentIndex,
+              selectedIndex: index,
               onDestinationSelected: _onTabTapped,
               labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
               destinations: const [
@@ -93,6 +103,8 @@ class _BottomNavWidgetState extends State<BottomNavWidget> {
                 ),
               ],
             ),
+              );
+            },
           );
         },
       ),

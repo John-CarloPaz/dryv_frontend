@@ -5,6 +5,7 @@ import 'package:dryvmobapp/Services/app_file_logger.dart';
 import 'package:dryvmobapp/Models/lat_lng.dart';
 import 'package:dryvmobapp/Screens/Navigation/route_preview_screen.dart';
 import 'package:dryvmobapp/Services/bottom_nav_visibility.dart';
+import 'package:dryvmobapp/Services/crucial_facility_selection_state.dart';
 import 'package:dryvmobapp/Widgets/grouped_buttons.dart';
 import 'package:dryvmobapp/Widgets/location_details.dart';
 import 'package:dryvmobapp/Widgets/search_bar.dart';
@@ -13,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -31,6 +33,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   _SelectedPlace? _selectedPlace;
 
+  CrucialFacilityMapSelection? _pendingFacilitySelection;
+  late final VoidCallback _facilitySelectionListener;
+
   final double defaultLng = 120.592083;
   final double defaultLat = 15.158430;
 
@@ -40,6 +45,17 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   bool _avoidMotorways = false;
   VehicleType _vehicleType = VehicleType.car;
+  bool _avoidCommunityFloodReports = false;
+
+  static const String _prefsKeyAvoidMotorways =
+      'dryv.route_settings.avoid_motorways';
+  static const String _prefsKeyVehicleTypeIndex =
+      'dryv.route_settings.vehicle_type_index';
+  static const String _prefsKeyAvoidCommunityFloodReports =
+      'dryv.route_settings.avoid_community_flood_reports';
+  // Bumps whenever the Mapbox style finishes loading (initial load or after a
+  // style URI change). Used by overlay widgets to re-apply runtime layers.
+  final ValueNotifier<int> _styleEpoch = ValueNotifier<int>(0);
 
   bool _pendingLocationAutoRetry = false;
 
@@ -47,6 +63,84 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    _loadRouteSettings();
+
+    _facilitySelectionListener = () {
+      final selection = CrucialFacilitySelectionState.selected.value;
+      if (selection == null) return;
+
+      // Clear immediately so switching tabs back/forth doesn't re-trigger.
+      CrucialFacilitySelectionState.clear();
+
+      if (!mapboxMapInitialized || annotationManager == null) {
+        _pendingFacilitySelection = selection;
+        return;
+      }
+
+      _applyFacilitySelection(selection);
+    };
+    CrucialFacilitySelectionState.selected.addListener(
+      _facilitySelectionListener,
+    );
+  }
+
+  Future<void> _loadRouteSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final avoidMotorways = prefs.getBool(_prefsKeyAvoidMotorways);
+      final vehicleTypeIndex = prefs.getInt(_prefsKeyVehicleTypeIndex);
+      final avoidCommunity = prefs.getBool(_prefsKeyAvoidCommunityFloodReports);
+
+      final vehicleType =
+          (vehicleTypeIndex != null &&
+              vehicleTypeIndex >= 0 &&
+              vehicleTypeIndex < VehicleType.values.length)
+          ? VehicleType.values[vehicleTypeIndex]
+          : null;
+
+      if (!mounted) return;
+      setState(() {
+        if (avoidMotorways != null) _avoidMotorways = avoidMotorways;
+        if (vehicleType != null) _vehicleType = vehicleType;
+        if (avoidCommunity != null) {
+          _avoidCommunityFloodReports = avoidCommunity;
+        }
+      });
+    } catch (e) {
+      // Best-effort; fall back to defaults.
+      AppFileLogger.instance.warn('Failed to load route settings: $e');
+    }
+  }
+
+  Future<void> _saveRouteSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefsKeyAvoidMotorways, _avoidMotorways);
+      await prefs.setInt(_prefsKeyVehicleTypeIndex, _vehicleType.index);
+      await prefs.setBool(
+        _prefsKeyAvoidCommunityFloodReports,
+        _avoidCommunityFloodReports,
+      );
+    } catch (e) {
+      // Best-effort; failing to persist must not break navigation.
+      AppFileLogger.instance.warn('Failed to save route settings: $e');
+    }
+  }
+
+  void _setAvoidMotorways(bool value) {
+    setState(() => _avoidMotorways = value);
+    _saveRouteSettings();
+  }
+
+  void _setVehicleType(VehicleType value) {
+    setState(() => _vehicleType = value);
+    _saveRouteSettings();
+  }
+
+  void _setAvoidCommunityFloodReports(bool value) {
+    setState(() => _avoidCommunityFloodReports = value);
+    _saveRouteSettings();
   }
 
   @override
@@ -63,6 +157,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             cameraOptions: camera,
             viewport: _viewport,
             onMapCreated: _onMapCreated,
+            onStyleLoadedListener: (_) {
+              // Make overlays re-apply after style updates.
+              _styleEpoch.value = _styleEpoch.value + 1;
+            },
           ),
           Positioned(
             top: 0,
@@ -82,15 +180,20 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               right: 14,
               child: GroupedButtons(
                 mapboxMap: mapboxMap,
+                styleEpoch: _styleEpoch,
                 isUserLocationEnabled: _userLocationEnabled,
                 onToggleUserLocation: _toggleUserLocation,
                 avoidMotorways: _avoidMotorways,
                 onAvoidMotorwaysChanged: (value) {
-                  setState(() => _avoidMotorways = value);
+                  _setAvoidMotorways(value);
                 },
                 vehicleType: _vehicleType,
                 onVehicleTypeChanged: (value) {
-                  setState(() => _vehicleType = value);
+                  _setVehicleType(value);
+                },
+                avoidCommunityFloodReports: _avoidCommunityFloodReports,
+                onAvoidCommunityFloodReportsChanged: (value) {
+                  _setAvoidCommunityFloodReports(value);
                 },
               ),
             ),
@@ -109,6 +212,66 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         .createPointAnnotationManager();
 
     setState(() => mapboxMapInitialized = true);
+
+    final pending = _pendingFacilitySelection;
+    if (pending != null) {
+      _pendingFacilitySelection = null;
+      await _applyFacilitySelection(pending);
+    }
+  }
+
+  Future<void> _applyFacilitySelection(
+    CrucialFacilityMapSelection selection,
+  ) async {
+    if (!mounted || !mapboxMapInitialized) return;
+
+    final lat = selection.lat;
+    final lng = selection.lng;
+
+    _selectedPlace = _SelectedPlace(
+      lat: lat,
+      lng: lng,
+      name: selection.name,
+      address: selection.address,
+    );
+
+    _searchController.text = selection.name;
+
+    try {
+      await mapboxMap.flyTo(
+        CameraOptions(center: Point(coordinates: Position(lng, lat)), zoom: 14),
+        MapAnimationOptions(duration: 1000),
+      );
+    } catch (_) {
+      // Best-effort.
+    }
+
+    // Remove previous annotations
+    for (var annotation in addedAnnotations) {
+      try {
+        await annotationManager?.delete(annotation);
+      } catch (_) {}
+    }
+    addedAnnotations.clear();
+
+    try {
+      final ByteData bytes = await rootBundle.load('lib/assets/images/pin.png');
+      final Uint8List imageData = bytes.buffer.asUint8List();
+
+      final newAnnotation = await annotationManager!.create(
+        PointAnnotationOptions(
+          geometry: Point(coordinates: Position(lng, lat)),
+          image: imageData,
+          iconSize: 0.3,
+        ),
+      );
+      addedAnnotations.add(newAnnotation);
+    } catch (_) {
+      // Ignore marker failures.
+    }
+
+    if (!mounted) return;
+    _showSelectedPlaceDetails();
   }
 
   Future<void> _toggleUserLocation() async {
@@ -337,7 +500,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final baseUrl = dotenv.env['API_BASE_URL'];
     final fallbackEndpoint = (baseUrl == null || baseUrl.trim().isEmpty)
         ? null
-        : '${baseUrl.replaceAll(RegExp(r"/+$"), "")}/route/safe';
+        : (() {
+            final normalized = baseUrl.replaceAll(RegExp(r"/+$"), "");
+            // API guide endpoint is `/api/route/safe`, but some deployments
+            // already expose baseUrl ending with `/api`.
+            return normalized.endsWith('/api')
+                ? '$normalized/route/safe'
+                : '$normalized/api/route/safe';
+          })();
 
     final endpoint =
         (dotenv.env['DRYV_SAFEST_ROUTE_URL']?.trim().isNotEmpty == true)
@@ -412,6 +582,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         destination: destination,
         vehicleType: _vehicleType.apiValue,
         avoidMotorways: _avoidMotorways,
+        toggleCommunityReport: _avoidCommunityFloodReports,
       );
     } on BackendRoutingException catch (e) {
       AppFileLogger.instance.warn(
@@ -419,9 +590,56 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      final msg = e.message.trim();
+      final normalized = msg.toLowerCase();
+      final isNoSafeRoute =
+          e.code == 'NO_SAFE_ROUTE' ||
+          normalized.contains('no safe path') ||
+          normalized.contains('no safe route') ||
+          normalized.contains('no found safe');
+
+      if (isNoSafeRoute) {
+        final displayMessage = msg
+            .replaceAll(
+              RegExp(
+                r'\bBackend returned HTTP\s+\d+\s*:\s*',
+                caseSensitive: false,
+              ),
+              '',
+            )
+            .trim();
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) {
+            final theme = Theme.of(dialogContext);
+            final cs = theme.colorScheme;
+            return AlertDialog(
+              icon: Icon(Icons.route_outlined, color: cs.primary),
+              title: Text(
+                'No safe path found',
+                style: theme.textTheme.titleLarge,
+              ),
+              content: Text(
+                displayMessage.isEmpty ? 'No safe path found.' : displayMessage,
+                style: theme.textTheme.bodyMedium,
+              ),
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(16)),
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
       return;
     } catch (e) {
       AppFileLogger.instance.error('Safest route unexpected error', err: e);
@@ -447,6 +665,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           destination: destination,
           originLabel: 'Your location',
           destinationLabel: destinationName,
+          vehicleType: _vehicleType.apiValue,
+          avoidMotorways: _avoidMotorways,
+          avoidCommunityFloodReports: _avoidCommunityFloodReports,
         ),
       ),
     );
@@ -456,6 +677,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
+    _styleEpoch.dispose();
+    CrucialFacilitySelectionState.selected.removeListener(
+      _facilitySelectionListener,
+    );
     super.dispose();
   }
 }

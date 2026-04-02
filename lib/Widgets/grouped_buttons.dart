@@ -1,6 +1,7 @@
 import 'package:dryvmobapp/Widgets/layers_button.dart';
 import 'package:dryvmobapp/Widgets/flood_legend_dialog.dart';
 import 'package:dryvmobapp/Widgets/route_settings_button.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
@@ -8,6 +9,7 @@ export 'route_settings_button.dart' show VehicleType, VehicleTypeX;
 
 class GroupedButtons extends StatefulWidget {
   final MapboxMap mapboxMap;
+  final ValueListenable<int>? styleEpoch;
   final bool isUserLocationEnabled;
   final VoidCallback onToggleUserLocation;
 
@@ -16,15 +18,21 @@ class GroupedButtons extends StatefulWidget {
   final VehicleType vehicleType;
   final ValueChanged<VehicleType> onVehicleTypeChanged;
 
+  final bool avoidCommunityFloodReports;
+  final ValueChanged<bool> onAvoidCommunityFloodReportsChanged;
+
   const GroupedButtons({
     super.key,
     required this.mapboxMap,
+    this.styleEpoch,
     required this.isUserLocationEnabled,
     required this.onToggleUserLocation,
     required this.avoidMotorways,
     required this.onAvoidMotorwaysChanged,
     required this.vehicleType,
     required this.onVehicleTypeChanged,
+    required this.avoidCommunityFloodReports,
+    required this.onAvoidCommunityFloodReportsChanged,
   });
 
   @override
@@ -75,6 +83,7 @@ class _GroupedButtonsState extends State<GroupedButtons> {
         const SizedBox(height: 10),
         LayerButtonWidget(
           mapboxMap: widget.mapboxMap,
+          styleEpoch: widget.styleEpoch,
           onFloodOverlayVisibilityChanged: (visibility) {
             if (!mounted) return;
             setState(() => _overlayVisibility = visibility);
@@ -86,6 +95,9 @@ class _GroupedButtonsState extends State<GroupedButtons> {
           onAvoidMotorwaysChanged: widget.onAvoidMotorwaysChanged,
           vehicleType: widget.vehicleType,
           onVehicleTypeChanged: widget.onVehicleTypeChanged,
+          avoidCommunityFloodReports: widget.avoidCommunityFloodReports,
+          onAvoidCommunityFloodReportsChanged:
+              widget.onAvoidCommunityFloodReportsChanged,
         ),
         if (_overlayVisibility.any) ...[
           const SizedBox(height: 10),

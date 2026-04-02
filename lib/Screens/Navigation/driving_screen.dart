@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
@@ -15,6 +16,8 @@ import 'package:dryvmobapp/Services/flood_community_report_service.dart';
 import 'package:dryvmobapp/Services/map_service.dart';
 import 'package:dryvmobapp/Services/realtime_flood_overlay_state.dart';
 import 'package:dryvmobapp/Services/route_line_overlay_service.dart';
+import 'package:dryvmobapp/Services/app_activity_state.dart';
+import 'package:dryvmobapp/Widgets/safest_route_loading.dart';
 
 class BackendRouteStep {
   final String instruction;
@@ -100,6 +103,9 @@ class DrivingScreen extends StatefulWidget {
   final LatLng destination;
   final String originLabel;
   final String destinationLabel;
+  final String vehicleType;
+  final bool avoidMotorways;
+  final bool avoidCommunityFloodReports;
 
   const DrivingScreen({
     super.key,
@@ -108,6 +114,9 @@ class DrivingScreen extends StatefulWidget {
     required this.destination,
     required this.originLabel,
     required this.destinationLabel,
+    required this.vehicleType,
+    required this.avoidMotorways,
+    required this.avoidCommunityFloodReports,
   });
 
   @override
@@ -156,6 +165,8 @@ class _DrivingScreenState extends State<DrivingScreen> {
   bool _turnEmphasis = false;
   bool _northUp = false;
 
+  bool _rerouteInFlight = false;
+
   final MapService _mapService = MapService();
   bool _realtimeFloodEnabled = false;
 
@@ -181,6 +192,9 @@ class _DrivingScreenState extends State<DrivingScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Suppress flood-nearby notifications while actively driving.
+    AppActivityState.setInDriving(true);
     // Start in follow-puck mode once the map is created.
     _viewport = _buildFollowViewport(zoom: 15.0, pitch: 0.0);
 
@@ -243,6 +257,11 @@ class _DrivingScreenState extends State<DrivingScreen> {
             cameraOptions: initialCamera,
             viewport: _viewport,
             onMapCreated: _onMapCreated,
+            onStyleLoadedListener: (_) {
+              // If the style is updated/reloaded, runtime layers are reset.
+              // Re-apply realtime flood overlay if it's enabled.
+              _mapService.reapplyRealtimeFloodLayer();
+            },
           ),
           // Top instruction banner (Google Maps-like)
           Positioned(
@@ -270,6 +289,8 @@ class _DrivingScreenState extends State<DrivingScreen> {
                 isFloodEnabled: _realtimeFloodEnabled,
                 onToggleFlood: _toggleRealtimeFlood,
                 onCommunityReport: _openCommunityReportSheet,
+                rerouteInFlight: _rerouteInFlight,
+                onReroute: _reroute,
               ),
             ),
 
@@ -319,10 +340,6 @@ class _DrivingScreenState extends State<DrivingScreen> {
       originHint: widget.origin,
       destinationHint: widget.destination,
     );
-
-    final extractedGap = extracted == null
-        ? null
-        : BackendRouteGeometry.maxConsecutiveGapMeters(extracted);
 
     final extractedBroken = extracted == null
         ? true
@@ -464,6 +481,7 @@ class _DrivingScreenState extends State<DrivingScreen> {
 
   @override
   void dispose() {
+    AppActivityState.setInDriving(false);
     _positionSub?.cancel();
     RealtimeFloodOverlayState.enabled.removeListener(
       _realtimeFloodGlobalListener,
@@ -490,6 +508,189 @@ class _DrivingScreenState extends State<DrivingScreen> {
       ).listen(_onPosition);
     } catch (_) {
       // Best-effort; the map can still be used.
+    }
+  }
+
+  Future<void> _reroute() async {
+    if (_rerouteInFlight) return;
+
+    setState(() => _rerouteInFlight = true);
+
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      // 1) Determine origin = current location (best effort).
+      LatLng? origin = _lastGps;
+      if (origin == null) {
+        try {
+          final p = await geo.Geolocator.getCurrentPosition(
+            locationSettings: const geo.LocationSettings(
+              accuracy: geo.LocationAccuracy.bestForNavigation,
+              timeLimit: Duration(seconds: 8),
+            ),
+          );
+          origin = LatLng(lat: p.latitude, lng: p.longitude);
+        } catch (_) {
+          // Fall back below.
+        }
+      }
+
+      final originFixed = origin ?? widget.origin;
+
+      // 2) Build backend endpoint from env; fail fast if not configured.
+      final baseUrl = dotenv.env['API_BASE_URL'];
+      final fallbackEndpoint = (baseUrl == null || baseUrl.trim().isEmpty)
+          ? null
+          : (() {
+              final normalized = baseUrl.replaceAll(RegExp(r"/+$"), "");
+              return normalized.endsWith('/api')
+                  ? '$normalized/route/safe'
+                  : '$normalized/api/route/safe';
+            })();
+
+      final endpoint =
+          (dotenv.env['DRYV_SAFEST_ROUTE_URL']?.trim().isNotEmpty == true)
+          ? dotenv.env['DRYV_SAFEST_ROUTE_URL']
+          : fallbackEndpoint;
+
+      if (endpoint == null || endpoint.trim().isEmpty) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Backend route URL not configured. Set API_BASE_URL or DRYV_SAFEST_ROUTE_URL in .env',
+            ),
+          ),
+        );
+        return;
+      }
+
+      // 3) Show full-screen loading UI while waiting for backend response.
+      if (!mounted) return;
+      navigator.push(
+        PageRouteBuilder(
+          opaque: false,
+          barrierDismissible: false,
+          barrierColor: Colors.transparent,
+          pageBuilder: (_, __, ___) => const SafestRouteLoadingOverlay(),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(
+              opacity: CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOutCubic,
+              ),
+              child: child,
+            );
+          },
+        ),
+      );
+
+      // Ensure the overlay is on the stack before we start, so a `pop()` closes it.
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      final service = BackendRoutingService(
+        safestRouteEndpoint: Uri.parse(endpoint),
+      );
+
+      late final BackendApprovedRoute approved;
+      try {
+        approved = await service.fetchSafestRoute(
+          origin: originFixed,
+          destination: widget.destination,
+          vehicleType: widget.vehicleType,
+          avoidMotorways: widget.avoidMotorways,
+          toggleCommunityReport: widget.avoidCommunityFloodReports,
+        );
+      } on BackendRoutingException catch (e) {
+        AppFileLogger.instance.warn(
+          'Re-route backend exception: ${e.code} ${e.message}',
+        );
+        if (!mounted) return;
+        navigator.pop();
+        final msg = e.message.trim();
+        final normalized = msg.toLowerCase();
+        final isNoSafeRoute =
+            e.code == 'NO_SAFE_ROUTE' ||
+            normalized.contains('no safe path') ||
+            normalized.contains('no safe route') ||
+            normalized.contains('no found safe');
+
+        if (isNoSafeRoute) {
+          final displayMessage = msg
+              .replaceAll(
+                RegExp(
+                  r'\bBackend returned HTTP\s+\d+\s*:\s*',
+                  caseSensitive: false,
+                ),
+                '',
+              )
+              .trim();
+          await showDialog<void>(
+            context: context,
+            builder: (dialogContext) {
+              final theme = Theme.of(dialogContext);
+              final cs = theme.colorScheme;
+              return AlertDialog(
+                icon: Icon(Icons.route_outlined, color: cs.primary),
+                title: Text(
+                  'No safe path found',
+                  style: theme.textTheme.titleLarge,
+                ),
+                content: Text(
+                  displayMessage.isEmpty
+                      ? 'No safe path found.'
+                      : displayMessage,
+                  style: theme.textTheme.bodyMedium,
+                ),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(16)),
+                ),
+                actions: [
+                  FilledButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('OK'),
+                  ),
+                ],
+              );
+            },
+          );
+        } else {
+          messenger.showSnackBar(SnackBar(content: Text(e.message)));
+        }
+        return;
+      } catch (e) {
+        AppFileLogger.instance.error('Re-route unexpected error', err: e);
+        if (!mounted) return;
+        navigator.pop();
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed to re-route: $e')),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      navigator.pop();
+
+      // 4) Restart driving immediately (no preview).
+      navigator.pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => DrivingScreen(
+            approved: approved,
+            origin: originFixed,
+            destination: widget.destination,
+            originLabel: 'Your location',
+            destinationLabel: widget.destinationLabel,
+            vehicleType: widget.vehicleType,
+            avoidMotorways: widget.avoidMotorways,
+            avoidCommunityFloodReports: widget.avoidCommunityFloodReports,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _rerouteInFlight = false);
+      }
     }
   }
 
@@ -1487,6 +1688,8 @@ class _RightButtonGroup extends StatelessWidget {
   final bool isFloodEnabled;
   final VoidCallback onToggleFlood;
   final VoidCallback onCommunityReport;
+  final bool rerouteInFlight;
+  final VoidCallback onReroute;
 
   const _RightButtonGroup({
     required this.isNorthUp,
@@ -1494,6 +1697,8 @@ class _RightButtonGroup extends StatelessWidget {
     required this.isFloodEnabled,
     required this.onToggleFlood,
     required this.onCommunityReport,
+    required this.rerouteInFlight,
+    required this.onReroute,
   });
 
   @override
@@ -1501,6 +1706,18 @@ class _RightButtonGroup extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        FloatingActionButton(
+          heroTag: 'fab-reroute-driving',
+          backgroundColor: Colors.white,
+          mini: true,
+          elevation: 2,
+          onPressed: rerouteInFlight ? null : onReroute,
+          child: Icon(
+            Icons.alt_route,
+            color: rerouteInFlight ? Colors.grey.shade400 : Colors.grey,
+          ),
+        ),
+        const SizedBox(height: 10),
         FloatingActionButton(
           heroTag: 'fab-compass-driving',
           backgroundColor: Colors.white,

@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "dryvmobapp" "\0"
+            VALUE "FileDescription", "AlistoPH" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "dryvmobapp" "\0"
+            VALUE "InternalName", "AlistoPH" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "dryvmobapp.exe" "\0"
-            VALUE "ProductName", "dryvmobapp" "\0"
+            VALUE "OriginalFilename", "AlistoPH.exe" "\0"
+            VALUE "ProductName", "AlistoPH" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

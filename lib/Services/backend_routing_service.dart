@@ -30,28 +30,122 @@ class BackendRoutingService {
     http.Client? client,
   }) : _client = client ?? http.Client();
 
+  static String _normalizeVehicleType(String vehicleType) {
+    final v = vehicleType.trim().toLowerCase();
+    switch (v) {
+      case 'car':
+      case 'motor':
+      case 'truck':
+      case 'walking':
+        return v;
+      // Backwards-compatible aliases used by older app builds.
+      case 'motorcycle':
+        return 'motor';
+      case 'walk':
+        return 'walking';
+      default:
+        return vehicleType;
+    }
+  }
+
+  static String _defaultRoutingProfileForVehicleType(String vehicleType) {
+    // API guide allows: traffic | driving | walking | cycling
+    // Keep it simple and deterministic.
+    return vehicleType == 'walking' ? 'walking' : 'driving';
+  }
+
+  static String? _tryExtractBackendErrorMessage(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final message = decoded['message'] ?? decoded['error'];
+        if (message is String && message.trim().isNotEmpty) {
+          return message.trim();
+        }
+
+        final detail = decoded['detail'];
+        if (detail is String && detail.trim().isNotEmpty) {
+          return detail.trim();
+        }
+
+        if (detail is List && detail.isNotEmpty) {
+          final first = detail.first;
+          if (first is Map) {
+            final msg = first['msg'] ?? first['message'] ?? first['detail'];
+            if (msg is String && msg.trim().isNotEmpty) {
+              return msg.trim();
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Ignore; body may not be JSON.
+    }
+    return null;
+  }
+
   Future<BackendApprovedRoute> fetchSafestRoute({
     required LatLng origin,
     required LatLng destination,
     String vehicleType = 'car',
     bool avoidMotorways = false,
+    String? routingProfile,
+    List<String>? exclude,
+    bool? avoidTolls,
+    int? maxAttempts,
+    bool toggleCommunityReport = false,
   }) async {
+    final normalizedVehicleType = _normalizeVehicleType(vehicleType);
+
+    final effectiveRoutingProfile =
+        (routingProfile != null && routingProfile.trim().isNotEmpty)
+        ? routingProfile.trim()
+        : _defaultRoutingProfileForVehicleType(normalizedVehicleType);
+
+    final effectiveMaxAttempts = maxAttempts ?? 5;
+
+    if (effectiveMaxAttempts < 1 || effectiveMaxAttempts > 20) {
+      throw BackendRoutingException(
+        'INVALID_MAX_ATTEMPTS',
+        'max_attempts must be between 1 and 20',
+      );
+    }
+
+    // Per API guide: avoid_tolls is forced off for car.
+    final effectiveAvoidTolls = (normalizedVehicleType == 'car')
+        ? false
+        : avoidTolls;
+
     AppFileLogger.instance.info(
-      'Fetching safest route: endpoint=$safestRouteEndpoint origin=${origin.lat},${origin.lng} dest=${destination.lat},${destination.lng} vehicleType=$vehicleType avoidMotorways=$avoidMotorways',
+      'Fetching safest route: endpoint=$safestRouteEndpoint origin=${origin.lat},${origin.lng} dest=${destination.lat},${destination.lng} vehicleType=$normalizedVehicleType routingProfile=$effectiveRoutingProfile maxAttempts=$effectiveMaxAttempts avoidMotorways=$avoidMotorways toggleCommunityReport=$toggleCommunityReport',
     );
 
-    final body = jsonEncode({
+    final payload = <String, dynamic>{
       'origin': {'lat': origin.lat, 'lng': origin.lng},
       'destination': {'lat': destination.lat, 'lng': destination.lng},
-      'vehicle_type': vehicleType,
+      'vehicle_type': normalizedVehicleType,
+      'routing_profile': effectiveRoutingProfile,
+      'max_attempts': effectiveMaxAttempts,
       'avoid_motorway': avoidMotorways,
-    });
+      'toggle_community_report': toggleCommunityReport,
+    };
+    if (exclude != null && exclude.isNotEmpty) {
+      payload['exclude'] = exclude;
+    }
+    if (avoidTolls != null) {
+      payload['avoid_tolls'] = effectiveAvoidTolls;
+    }
+
+    final body = jsonEncode(payload);
 
     late final http.Response resp;
     try {
       resp = await _client.post(
         safestRouteEndpoint,
-        headers: {'content-type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: body,
       );
     } on SocketException catch (e) {
@@ -88,12 +182,16 @@ class BackendRoutingService {
       final snippet = resp.body.length > 800
           ? '${resp.body.substring(0, 800)}...'
           : resp.body;
+
+      final backendMessage = _tryExtractBackendErrorMessage(resp.body);
       AppFileLogger.instance.error(
         'Backend HTTP error: status=${resp.statusCode} body=$snippet',
       );
       throw BackendRoutingException(
         'BACKEND_HTTP_${resp.statusCode}',
-        'Backend returned HTTP ${resp.statusCode}',
+        backendMessage == null || backendMessage.isEmpty
+            ? 'Backend returned HTTP ${resp.statusCode}: $snippet'
+            : 'Backend returned HTTP ${resp.statusCode}: $backendMessage',
       );
     }
 

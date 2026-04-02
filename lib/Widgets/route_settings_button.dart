@@ -8,11 +8,11 @@ extension VehicleTypeX on VehicleType {
       case VehicleType.car:
         return 'car';
       case VehicleType.motorcycle:
-        return 'motorcycle';
+        return 'motor';
       case VehicleType.truck:
         return 'truck';
       case VehicleType.walk:
-        return 'walk';
+        return 'walking';
     }
   }
 
@@ -48,6 +48,8 @@ class RouteSettingsButton extends StatelessWidget {
   final ValueChanged<bool> onAvoidMotorwaysChanged;
   final VehicleType vehicleType;
   final ValueChanged<VehicleType> onVehicleTypeChanged;
+  final bool avoidCommunityFloodReports;
+  final ValueChanged<bool> onAvoidCommunityFloodReportsChanged;
   final String heroTag;
 
   const RouteSettingsButton({
@@ -56,6 +58,8 @@ class RouteSettingsButton extends StatelessWidget {
     required this.onAvoidMotorwaysChanged,
     required this.vehicleType,
     required this.onVehicleTypeChanged,
+    required this.avoidCommunityFloodReports,
+    required this.onAvoidCommunityFloodReportsChanged,
     this.heroTag = 'fab-route-settings',
   });
 
@@ -67,6 +71,7 @@ class RouteSettingsButton extends StatelessWidget {
       builder: (sheetContext) {
         var localAvoidMotorways = avoidMotorways;
         var localVehicleType = vehicleType;
+        var localAvoidCommunityFloodReports = avoidCommunityFloodReports;
 
         return StatefulBuilder(
           builder: (context, setSheetState) {
@@ -94,6 +99,17 @@ class RouteSettingsButton extends StatelessWidget {
                       onChanged: (value) {
                         setSheetState(() => localAvoidMotorways = value);
                         onAvoidMotorwaysChanged(value);
+                      },
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Avoid community flood reports'),
+                      value: localAvoidCommunityFloodReports,
+                      onChanged: (value) {
+                        setSheetState(
+                          () => localAvoidCommunityFloodReports = value,
+                        );
+                        onAvoidCommunityFloodReportsChanged(value);
                       },
                     ),
                     const SizedBox(height: 10),

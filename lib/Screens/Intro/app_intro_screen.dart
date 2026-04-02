@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:dryvmobapp/Services/intro_preferences.dart';
 import 'package:dryvmobapp/theme/app_colors.dart';
@@ -30,7 +31,8 @@ class _AppIntroScreenState extends State<AppIntroScreen> {
     _IntroSlideData(
       imageAssetPath: 'lib/assets/images/intro1.png',
       title: 'Avoid Flooded Roads',
-      subtitle: 'Real-time alerts help you steer clear\nof flood-prone streets.',
+      subtitle:
+          'Real-time alerts help you steer clear\nof flood-prone streets.',
     ),
     _IntroSlideData(
       imageAssetPath: 'lib/assets/images/intro2.png',
@@ -76,7 +78,7 @@ class _AppIntroScreenState extends State<AppIntroScreen> {
             children: [
               Align(
                 alignment: Alignment.center,
-                child: Image.asset(
+                child: SvgPicture.asset(
                   'lib/assets/images/header-icon.svg',
                   height: 36,
                   fit: BoxFit.contain,

@@ -3,11 +3,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:background_fetch/background_fetch.dart';
 import 'package:dryvmobapp/Widgets/bottom_navigation.dart';
 import 'package:dryvmobapp/Screens/Forecast/forecast_screen.dart';
 import 'package:dryvmobapp/Screens/CrucialLocations/crucial_locations_screen.dart';
 
 import 'package:dryvmobapp/Services/app_file_logger.dart';
+import 'package:dryvmobapp/Services/flood_nearby_background_service.dart';
+import 'package:dryvmobapp/Services/notification_service.dart';
 
 // Screens
 import 'package:dryvmobapp/Screens/Map/map_display.dart';
@@ -15,6 +18,7 @@ import 'package:dryvmobapp/Screens/Authentication/login_page.dart';
 import 'package:dryvmobapp/Screens/Authentication/registration_page.dart';
 import 'package:dryvmobapp/Screens/Authentication/forgot_password_page.dart';
 import 'package:dryvmobapp/Screens/Legal/terms_and_conditions_page.dart';
+import 'package:dryvmobapp/Screens/Legal/privacy_policy_page.dart';
 import 'package:dryvmobapp/Screens/Intro/intro_gate.dart';
 
 void main() async {
@@ -26,6 +30,11 @@ void main() async {
   AppFileLogger.instance.info(
     'App starting. logFilePath=${AppFileLogger.instance.logFilePath ?? "(none)"}',
   );
+
+  // Background flood monitoring (periodic; timing depends on OS).
+  BackgroundFetch.registerHeadlessTask(floodNearbyBackgroundFetchHeadlessTask);
+  await NotificationService.init(requestPermissions: false);
+  await FloodNearbyBackgroundService.start();
 
   // Capture framework errors.
   FlutterError.onError = (details) {
@@ -52,6 +61,12 @@ void main() async {
   }
 
   runApp(const ProviderScope(child: MyApp()));
+
+  // Request notification permission after a frame so Android can show the
+  // runtime permission prompt reliably.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    NotificationService.init(requestPermissions: true);
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -80,6 +95,7 @@ class MyApp extends StatelessWidget {
         '/auth/register': (_) => const RegistrationPage(),
         '/auth/forgot-password': (_) => const ForgotPasswordPage(),
         '/terms': (_) => const TermsAndConditionsPage(),
+        '/privacy': (_) => const PrivacyPolicyPage(),
         '/home': (_) => const BottomNavWidget(
           pages: [MapScreen(), CrucialLocationsScreen(), ForecastScreen()],
         ),

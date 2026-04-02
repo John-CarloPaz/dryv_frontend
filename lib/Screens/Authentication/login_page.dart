@@ -80,6 +80,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     Navigator.of(context).pushNamed('/terms');
   }
 
+  void _openPrivacy() {
+    Navigator.of(context).pushNamed('/privacy');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -100,7 +104,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       child: SvgPicture.asset(
                         'lib/assets/images/header-icon.svg',
                         height: 92,
-                        fit: BoxFit.contain
+                        fit: BoxFit.contain,
                       ),
                     ),
                     const SizedBox(height: 22),
@@ -190,7 +194,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           ),
                         ),
                         TextButton(
-                          onPressed: _openTerms,
+                          onPressed: _openPrivacy,
                           style: TextButton.styleFrom(
                             padding: EdgeInsets.zero,
                             minimumSize: const Size(0, 0),

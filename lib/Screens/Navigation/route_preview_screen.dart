@@ -8,6 +8,7 @@ import 'package:dryvmobapp/Services/app_file_logger.dart';
 import 'package:dryvmobapp/Services/map_service.dart';
 import 'package:dryvmobapp/Services/realtime_flood_overlay_state.dart';
 import 'package:dryvmobapp/Services/route_line_overlay_service.dart';
+import 'package:dryvmobapp/Services/app_activity_state.dart';
 import 'package:dryvmobapp/Widgets/route_info_sheet.dart';
 import 'package:dryvmobapp/Models/lat_lng.dart' as dryv;
 
@@ -19,6 +20,9 @@ class RoutePreviewScreen extends StatefulWidget {
   final dryv.LatLng destination;
   final String originLabel;
   final String destinationLabel;
+  final String vehicleType;
+  final bool avoidMotorways;
+  final bool avoidCommunityFloodReports;
 
   const RoutePreviewScreen({
     super.key,
@@ -27,6 +31,9 @@ class RoutePreviewScreen extends StatefulWidget {
     required this.destination,
     required this.originLabel,
     required this.destinationLabel,
+    required this.vehicleType,
+    required this.avoidMotorways,
+    required this.avoidCommunityFloodReports,
   });
 
   @override
@@ -50,6 +57,9 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
   void initState() {
     super.initState();
 
+    // Suppress flood-nearby notifications while previewing a route.
+    AppActivityState.setInRoutePreview(true);
+
     _realtimeFloodEnabled = RealtimeFloodOverlayState.isEnabled;
     _realtimeFloodGlobalListener = () {
       _setRealtimeFloodEnabled(
@@ -67,7 +77,15 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          MapWidget(cameraOptions: initialCamera, onMapCreated: _onMapCreated),
+          MapWidget(
+            cameraOptions: initialCamera,
+            onMapCreated: _onMapCreated,
+            onStyleLoadedListener: (_) {
+              // If the style is updated/reloaded, runtime layers are reset.
+              // Re-apply realtime flood overlay if it's enabled.
+              _mapService.reapplyRealtimeFloodLayer();
+            },
+          ),
           Positioned(
             top: 12,
             left: 12,
@@ -172,10 +190,6 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
       originHint: widget.origin,
       destinationHint: widget.destination,
     );
-
-    final extractedGap = extracted == null
-        ? null
-        : BackendRouteGeometry.maxConsecutiveGapMeters(extracted);
 
     final extractedBroken = extracted == null
         ? true
@@ -304,6 +318,9 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
           destination: widget.destination,
           originLabel: widget.originLabel,
           destinationLabel: widget.destinationLabel,
+          vehicleType: widget.vehicleType,
+          avoidMotorways: widget.avoidMotorways,
+          avoidCommunityFloodReports: widget.avoidCommunityFloodReports,
         ),
       ),
     );
@@ -311,6 +328,7 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
 
   @override
   void dispose() {
+    AppActivityState.setInRoutePreview(false);
     RealtimeFloodOverlayState.enabled.removeListener(
       _realtimeFloodGlobalListener,
     );

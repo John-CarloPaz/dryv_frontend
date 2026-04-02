@@ -57,6 +57,8 @@ class _RegistrationPageState extends ConsumerState<RegistrationPage> {
 
   void _openTerms() => Navigator.of(context).pushNamed('/terms');
 
+  void _openPrivacy() => Navigator.of(context).pushNamed('/privacy');
+
   Future<void> _register() async {
     if (!_agree) {
       _showError('Please accept the Terms and Conditions.');
@@ -328,7 +330,7 @@ class _RegistrationPageState extends ConsumerState<RegistrationPage> {
                                   ),
                                 ),
                                 TextButton(
-                                  onPressed: _openTerms,
+                                  onPressed: _openPrivacy,
                                   style: TextButton.styleFrom(
                                     padding: EdgeInsets.zero,
                                     minimumSize: const Size(0, 0),

@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'package:dryvmobapp/Services/community_flood_overlay_service.dart';
+import 'package:dryvmobapp/Services/app_file_logger.dart';
+import 'package:dryvmobapp/Services/mapbox_tileset_metadata_service.dart';
 import 'package:dryvmobapp/Services/realtime_flood_overlay_state.dart';
 
 class FloodOverlayVisibility {
@@ -22,24 +27,144 @@ class LayerButtonWidget extends StatefulWidget {
   final MapboxMap mapboxMap;
   final VoidCallback? onStyleChanged;
   final ValueChanged<FloodOverlayVisibility>? onFloodOverlayVisibilityChanged;
+
+  /// Monotonically-increasing counter that bumps whenever the Mapbox style
+  /// finishes loading (e.g., after `setStyleURI`). When this changes, enabled
+  /// overlays are re-applied so they stay in sync with the active style.
+  final ValueListenable<int>? styleEpoch;
   const LayerButtonWidget({
     super.key,
     required this.mapboxMap,
     this.onStyleChanged,
     this.onFloodOverlayVisibilityChanged,
+    this.styleEpoch,
   });
 
   @override
   State<LayerButtonWidget> createState() => _LayerButtonWidgetState();
 }
 
-class _LayerButtonWidgetState extends State<LayerButtonWidget> {
+class _LayerButtonWidgetState extends State<LayerButtonWidget>
+    with WidgetsBindingObserver {
   bool _isFloodLayerVisible = false;
   bool _isRealtimeFloodLayerVisible = false;
   bool _isCommunityReportedFloodsVisible = false;
 
+  Timer? _realtimeFloodRefreshTimer;
+
+  int? _lastStyleEpoch;
+  bool _reapplyQueued = false;
+  bool _reapplyInProgress = false;
+
   final CommunityFloodOverlayService _communityFloodOverlayService =
       CommunityFloodOverlayService();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _attachStyleEpochListener(widget.styleEpoch);
+  }
+
+  @override
+  void didUpdateWidget(covariant LayerButtonWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.styleEpoch != widget.styleEpoch) {
+      _detachStyleEpochListener(oldWidget.styleEpoch);
+      _attachStyleEpochListener(widget.styleEpoch);
+    }
+  }
+
+  @override
+  void dispose() {
+    _realtimeFloodRefreshTimer?.cancel();
+    _detachStyleEpochListener(widget.styleEpoch);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (!mounted) return;
+    if (!_isRealtimeFloodLayerVisible &&
+        !_isFloodLayerVisible &&
+        !_isCommunityReportedFloodsVisible) {
+      return;
+    }
+
+    // On resume, prompt a re-apply so newly available tiles/styles show up.
+    _queueReapplyEnabledOverlays();
+  }
+
+  void _startRealtimeFloodAutoRefresh() {
+    _realtimeFloodRefreshTimer?.cancel();
+
+    // Keep this conservative: enough to pick up tileset updates without
+    // hammering the network.
+    const interval = Duration(minutes: 2);
+    _realtimeFloodRefreshTimer = Timer.periodic(interval, (_) {
+      if (!mounted) return;
+      if (!_isRealtimeFloodLayerVisible) return;
+      // Re-add the overlay to encourage tile refresh.
+      _queueReapplyEnabledOverlays();
+    });
+  }
+
+  void _stopRealtimeFloodAutoRefresh() {
+    _realtimeFloodRefreshTimer?.cancel();
+    _realtimeFloodRefreshTimer = null;
+  }
+
+  void _attachStyleEpochListener(ValueListenable<int>? epoch) {
+    if (epoch == null) return;
+    _lastStyleEpoch = epoch.value;
+    epoch.addListener(_onStyleEpochChanged);
+  }
+
+  void _detachStyleEpochListener(ValueListenable<int>? epoch) {
+    if (epoch == null) return;
+    epoch.removeListener(_onStyleEpochChanged);
+  }
+
+  void _onStyleEpochChanged() {
+    final epoch = widget.styleEpoch;
+    if (!mounted || epoch == null) return;
+
+    final current = epoch.value;
+    final last = _lastStyleEpoch;
+    _lastStyleEpoch = current;
+
+    // Ignore the initial attachment or no-op bumps.
+    if (last != null && current == last) return;
+
+    // Only re-apply if we have something enabled.
+    if (!_isFloodLayerVisible &&
+        !_isRealtimeFloodLayerVisible &&
+        !_isCommunityReportedFloodsVisible) {
+      return;
+    }
+
+    _queueReapplyEnabledOverlays();
+  }
+
+  void _queueReapplyEnabledOverlays() {
+    _reapplyQueued = true;
+    if (_reapplyInProgress) return;
+
+    () async {
+      _reapplyInProgress = true;
+      try {
+        while (mounted && _reapplyQueued) {
+          _reapplyQueued = false;
+          await _waitForStyleReady(timeout: const Duration(seconds: 20));
+          await _reapplyEnabledOverlays();
+        }
+      } finally {
+        _reapplyInProgress = false;
+      }
+    }();
+  }
 
   void _notifyOverlayVisibility() {
     widget.onFloodOverlayVisibilityChanged?.call(
@@ -65,6 +190,63 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     return lower.contains('location') ||
         lower.contains('puck') ||
         lower.contains('mapbox-location');
+  }
+
+  Future<void> _waitForStyleReady({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final mapboxMap = widget.mapboxMap;
+    final start = DateTime.now();
+
+    while (DateTime.now().difference(start) < timeout) {
+      try {
+        // This throws if the style isn't ready yet.
+        await mapboxMap.style.getStyleLayers();
+        return;
+      } catch (_) {
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+    }
+  }
+
+  Future<void> _waitForNextStyleEpoch({
+    required int from,
+    Duration timeout = const Duration(seconds: 25),
+  }) async {
+    final epoch = widget.styleEpoch;
+    if (epoch == null) return;
+    if (epoch.value > from) return;
+
+    final completer = Completer<void>();
+    void listener() {
+      if (epoch.value > from && !completer.isCompleted) {
+        epoch.removeListener(listener);
+        completer.complete();
+      }
+    }
+
+    epoch.addListener(listener);
+    try {
+      await completer.future.timeout(timeout);
+    } finally {
+      epoch.removeListener(listener);
+    }
+  }
+
+  List<Object> _equalsNumOrStringFromKeys({
+    required List<String> keys,
+    required int value,
+  }) {
+    final getExpr = <Object>[
+      'coalesce',
+      for (final k in keys) <Object>['get', k],
+    ];
+
+    return <Object>[
+      'any',
+      <Object>['==', getExpr, value],
+      <Object>['==', getExpr, value.toString()],
+    ];
   }
 
   Future<String?> _findOverlayAnchorLayerId() async {
@@ -284,12 +466,22 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   }
 
   Future<void> _changeMapStyle(String styleUrl) async {
+    final styleEpochBefore = widget.styleEpoch?.value;
     await widget.mapboxMap.style.setStyleURI(styleUrl);
-    // Notify parent so it can re-apply sources/layers that were removed by style change
+
+    // Style changes reset runtime-added sources/layers. Prefer waiting for the
+    // actual "style loaded" event (when wired) instead of just probing.
+    if (styleEpochBefore != null) {
+      await _waitForNextStyleEpoch(from: styleEpochBefore);
+    }
+
+    // Fallback / extra safety: ensure style APIs are usable.
+    await _waitForStyleReady();
+
+    // Notify parent so it can re-apply sources/layers that were removed by style change.
     widget.onStyleChanged?.call();
 
     // Re-apply any overlays that were enabled prior to the style change.
-    // Style changes reset runtime-added sources/layers.
     await _reapplyEnabledOverlays();
   }
 
@@ -386,15 +578,41 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
   Future<void> _addFloodLayer() async {
     final mapboxMap = widget.mapboxMap;
 
+    await _waitForStyleReady();
+
     // Ensure no stale source/layers exist.
     await _removeFloodLayer();
 
+    const tilesetUrl = 'mapbox://alistoph.jdmuwtzi';
+
+    final envOverride = (dotenv.env['FLOOD_TILESET_SOURCE_LAYER'] ?? '').trim();
+    final resolvedSourceLayer =
+        await MapboxTilesetMetadataService.resolveSourceLayer(
+          tilesetUrl,
+          preferred: const ['flood'],
+        );
+
+    final sourceLayer = envOverride.isNotEmpty
+        ? envOverride
+        : (resolvedSourceLayer ?? 'flood');
+    if (envOverride.isNotEmpty) {
+      AppFileLogger.instance.info(
+        'Flood tileset source-layer overridden via .env: $envOverride',
+      );
+    }
+    if (resolvedSourceLayer == null) {
+      AppFileLogger.instance.warn(
+        'Flood tileset source-layer could not be resolved; falling back to sourceLayer=$sourceLayer',
+      );
+    } else if (resolvedSourceLayer != 'flood') {
+      AppFileLogger.instance.info(
+        'Flood tileset source-layer resolved: $resolvedSourceLayer (was expecting "flood")',
+      );
+    }
+
     // Hosted vector tileset for Pampanga flood map
     await mapboxMap.style.addSource(
-      VectorSource(
-        id: 'flood_source',
-        url: 'mapbox://johncarlo123.pampanga-flood-map',
-      ),
+      VectorSource(id: 'flood_source', url: tilesetUrl),
     );
 
     final basePosition = await _overlayBaseLayerPosition();
@@ -403,12 +621,8 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     final floodVar1 = FillLayer(
       id: 'flood-layer-var1',
       sourceId: 'flood_source',
-      sourceLayer: 'flood',
-      filter: [
-        '==',
-        ['get', 'Var'],
-        1,
-      ],
+      sourceLayer: sourceLayer,
+      filter: _equalsNumOrStringFromKeys(keys: const ['Var', 'var'], value: 1),
       fillColor: Colors.yellow.withValues(alpha: .6).toARGB32(),
     );
     if (basePosition != null) {
@@ -421,12 +635,11 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       FillLayer(
         id: 'flood-layer-var2',
         sourceId: 'flood_source',
-        sourceLayer: 'flood',
-        filter: [
-          '==',
-          ['get', 'Var'],
-          2,
-        ],
+        sourceLayer: sourceLayer,
+        filter: _equalsNumOrStringFromKeys(
+          keys: const ['Var', 'var'],
+          value: 2,
+        ),
         fillColor: Colors.orange.withValues(alpha: 0.6).toARGB32(),
       ),
       LayerPosition(above: 'flood-layer-var1'),
@@ -436,12 +649,11 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       FillLayer(
         id: 'flood-layer-var3',
         sourceId: 'flood_source',
-        sourceLayer: 'flood',
-        filter: [
-          '==',
-          ['get', 'Var'],
-          3,
-        ],
+        sourceLayer: sourceLayer,
+        filter: _equalsNumOrStringFromKeys(
+          keys: const ['Var', 'var'],
+          value: 3,
+        ),
         fillColor: Colors.red.withValues(alpha: 0.6).toARGB32(),
       ),
       LayerPosition(above: 'flood-layer-var2'),
@@ -503,6 +715,7 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       _notifyOverlayVisibility();
       widget.onStyleChanged?.call();
       RealtimeFloodOverlayState.setEnabled(false);
+      _stopRealtimeFloodAutoRefresh();
       return;
     }
 
@@ -514,12 +727,13 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     }
 
     try {
-      await _addRealtimeFloodLayer();
+      await _addRealtimeFloodLayer(forceRefreshMetadata: true);
       setState(() => _isRealtimeFloodLayerVisible = true);
       _notifyOverlayVisibility();
       debugPrint('✅ Realtime flood layer loaded from realtime tileset.');
       widget.onStyleChanged?.call();
       RealtimeFloodOverlayState.setEnabled(true);
+      _startRealtimeFloodAutoRefresh();
     } catch (ePrimary, stPrimary) {
       debugPrint(
         '❌ Failed to load realtime flood tileset: $ePrimary\n$stPrimary',
@@ -550,8 +764,12 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     if (sourceExists) await mapboxMap.style.removeStyleSource(sourceId);
   }
 
-  Future<void> _addRealtimeFloodLayer() async {
+  Future<void> _addRealtimeFloodLayer({
+    bool forceRefreshMetadata = false,
+  }) async {
     final mapboxMap = widget.mapboxMap;
+
+    await _waitForStyleReady();
 
     const sourceId = 'realtime-flood-source';
     const fillLayerId1 = 'realtime-flood-layer-1';
@@ -560,12 +778,45 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
 
     // Use hosted vector tileset for realtime flood view.
     // Keep in sync with MapService realtime flood tileset.
-    const primaryTilesetUrl = 'mapbox://johncarlo123.dryv_tileset_1';
+    const primaryTilesetUrl = 'mapbox://alistoph.dryv_tileset_5';
+
+    final envOverride =
+        (dotenv.env['REALTIME_FLOOD_TILESET_SOURCE_LAYER'] ?? '').trim();
+
+    final resolvedSourceLayer =
+        await MapboxTilesetMetadataService.resolveSourceLayer(
+          primaryTilesetUrl,
+          preferred: const ['flooded'],
+          forceRefresh: forceRefreshMetadata,
+          ttl: const Duration(minutes: 2),
+        );
+    final sourceLayer = envOverride.isNotEmpty
+        ? envOverride
+        : (resolvedSourceLayer ?? 'flooded');
+    if (envOverride.isNotEmpty) {
+      AppFileLogger.instance.info(
+        'Realtime flood tileset source-layer overridden via .env: $envOverride',
+      );
+    }
+    if (resolvedSourceLayer == null) {
+      AppFileLogger.instance.warn(
+        'Realtime flood tileset source-layer could not be resolved; falling back to sourceLayer=$sourceLayer',
+      );
+    } else if (resolvedSourceLayer != 'flooded') {
+      AppFileLogger.instance.info(
+        'Realtime flood tileset source-layer resolved: $resolvedSourceLayer (was expecting "flooded")',
+      );
+    }
 
     await _removeRealtimeFloodLayer();
 
     await mapboxMap.style.addSource(
-      VectorSource(id: sourceId, url: primaryTilesetUrl),
+      VectorSource(
+        id: sourceId,
+        url: primaryTilesetUrl,
+        volatile: true,
+        minimumTileUpdateInterval: 15,
+      ),
     );
 
     final basePosition = await _overlayBaseLayerPosition();
@@ -573,12 +824,11 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
     final realtimeFill1 = FillLayer(
       id: fillLayerId1,
       sourceId: sourceId,
-      sourceLayer: 'flooded',
-      filter: [
-        '==',
-        ['get', 'risk_level'],
-        1,
-      ],
+      sourceLayer: sourceLayer,
+      filter: _equalsNumOrStringFromKeys(
+        keys: const ['risk_level', 'riskLevel'],
+        value: 1,
+      ),
       fillColor: Colors.yellow.withValues(alpha: 0.6).toARGB32(),
     );
     if (basePosition != null) {
@@ -591,12 +841,11 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       FillLayer(
         id: fillLayerId2,
         sourceId: sourceId,
-        sourceLayer: 'flooded',
-        filter: [
-          '==',
-          ['get', 'risk_level'],
-          2,
-        ],
+        sourceLayer: sourceLayer,
+        filter: _equalsNumOrStringFromKeys(
+          keys: const ['risk_level', 'riskLevel'],
+          value: 2,
+        ),
         fillColor: Colors.orange.withValues(alpha: 0.6).toARGB32(),
       ),
       LayerPosition(above: fillLayerId1),
@@ -606,12 +855,11 @@ class _LayerButtonWidgetState extends State<LayerButtonWidget> {
       FillLayer(
         id: fillLayerId3,
         sourceId: sourceId,
-        sourceLayer: 'flooded',
-        filter: [
-          '==',
-          ['get', 'risk_level'],
-          3,
-        ],
+        sourceLayer: sourceLayer,
+        filter: _equalsNumOrStringFromKeys(
+          keys: const ['risk_level', 'riskLevel'],
+          value: 3,
+        ),
         fillColor: Colors.red.withValues(alpha: 0.6).toARGB32(),
       ),
       LayerPosition(above: fillLayerId2),
